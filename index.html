@@ -1,0 +1,1012 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DJ-AMP</title>
+    <link rel="icon" href="data:,">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Lucida+Grande&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        color-scheme: light;
+
+        /* dark unified title bar (graphite) */
+        --tb-1: #adadad;
+        --tb-2: #8a8a8a;
+        --tb-3: #6b6b6b;
+        --tb-4: #525252;
+        --tb-line: #2a2a2a;
+        --tb-text: #1a1a1a;
+        --tb-text-inactive: #5a5a5a;
+
+        /* brushed aluminum window body */
+        --al-1: #e8e8e8;
+        --al-2: #cfcfcf;
+        --al-3: #b8b8b8;
+        --al-line: #7c7c7c;
+
+        /* panel surfaces */
+        --pn-1: #f6f6f6;
+        --pn-2: #dedede;
+        --pn-3: #c4c4c4;
+        --pn-edge: #8c8c8c;
+
+        /* section-header gradients (light pinstripe) */
+        --sh-1: #ededed;
+        --sh-2: #c8c8c8;
+        --sh-line: #8c8c8c;
+        --sh-text: #1a1a1a;
+
+        /* Aqua blue accents */
+        --aq-1: #c4def8;
+        --aq-2: #6aa8e4;
+        --aq-3: #2870c8;
+        --aq-4: #1c4a8c;
+        --aq-glow: rgba(70,140,230,0.55);
+
+        /* traffic lights */
+        --tl-red-1: #ff8a82;
+        --tl-red-2: #ff5f57;
+        --tl-red-3: #c43d36;
+        --tl-yellow-1: #ffd86a;
+        --tl-yellow-2: #ffbd2e;
+        --tl-yellow-3: #c08416;
+        --tl-green-1: #5be269;
+        --tl-green-2: #28c940;
+        --tl-green-3: #149e26;
+        --tl-off-1: #d8d8d8;
+        --tl-off-2: #aaaaaa;
+        --tl-off-3: #6e6e6e;
+
+        --ink: #1a1a1a;
+        --ink-dim: #4c4c4c;
+
+        /* Aqua half-and-half glass sheen — first layer of every blue control,
+           sits behind text because it's part of the `background` property. */
+        --gloss: linear-gradient(180deg,
+          rgba(255,255,255,0.55) 0%,
+          rgba(255,255,255,0.55) 50%,
+          rgba(255,255,255,0)    50%,
+          rgba(255,255,255,0)    100%);
+      }
+
+      html, body { margin: 0; padding: 0; height: 100%; }
+      body {
+        font-family: 'Lucida Grande', -apple-system, system-ui, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+        background: url('/desktop-bg.png') center / cover no-repeat fixed, #0c0a26;
+        color: var(--ink);
+        font-size: 12px;
+        padding: 24px;
+        line-height: 1.4;
+        height: 100vh;
+        overflow: hidden;
+        box-sizing: border-box;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      #viz { display: none; }
+
+      /* Aqua sheen lives inside each control's `background` property (see --gloss)
+         so it sits behind the text content automatically. */
+
+      /* ───── Window frame (Leopard rounded card on the desktop) ───── */
+      .window {
+        height: 100%;
+        max-width: 1400px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        background: var(--al-2);
+        border-radius: 8px;
+        border: 1px solid #000;
+        box-shadow:
+          /* thin glow rim */
+          0 0 0 1px rgba(255,255,255,0.05),
+          /* big diffuse drop shadow */
+          0 30px 60px rgba(0,0,0,0.55),
+          0 10px 24px rgba(0,0,0,0.4),
+          /* fine top highlight */
+          inset 0 1px 0 rgba(255,255,255,0.25);
+        overflow: hidden;
+      }
+
+      /* ───── Title bar (dark graphite unified bar) ───── */
+      #title-bar {
+        background:
+          linear-gradient(180deg,
+            var(--tb-1) 0%,
+            var(--tb-2) 30%,
+            var(--tb-3) 65%,
+            var(--tb-4) 100%);
+        color: var(--tb-text);
+        padding: 4px 10px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        text-shadow: 0 1px 0 rgba(255,255,255,0.25);
+        border-bottom: 1px solid var(--tb-line);
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.55),
+          inset 0 -1px 0 rgba(0,0,0,0.45);
+        flex: 0 0 auto;
+        position: relative;
+        height: 22px;
+        font-size: 13px;
+      }
+      #title-bar h1 {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0;
+        color: var(--tb-text);
+        text-shadow: 0 1px 0 rgba(255,255,255,0.35);
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        pointer-events: none;
+        white-space: nowrap;
+      }
+      #title-bar .tag { display: none; }
+
+      /* Traffic lights (always colored, glassy domes) */
+      .window-controls {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 0 2px;
+      }
+      .wc {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        padding: 0;
+        font-size: 0;
+        line-height: 0;
+        border: 1px solid rgba(0,0,0,0.55);
+        box-shadow:
+          inset 0  -1px 1px rgba(0,0,0,0.35),
+          inset 0   1px 0 rgba(255,255,255,0.25),
+          0 1px 1px rgba(0,0,0,0.35);
+        cursor: pointer;
+        position: relative;
+      }
+      /* Bright glassy highlight curl on top of each lens */
+      .wc::after {
+        content: '';
+        position: absolute;
+        top: 1px;
+        left: 2px;
+        right: 2px;
+        height: 5px;
+        border-radius: 50% 50% 60% 60% / 100% 100% 50% 50%;
+        background:
+          linear-gradient(180deg,
+            rgba(255,255,255,0.92) 0%,
+            rgba(255,255,255,0.55) 45%,
+            rgba(255,255,255,0) 100%);
+        pointer-events: none;
+      }
+      /* Tiny inner-shadow speck at the bottom — strengthens the glass-dome read */
+      .wc::before {
+        content: '';
+        position: absolute;
+        left: 50%; bottom: 1px;
+        width: 4px; height: 2px;
+        transform: translateX(-50%);
+        border-radius: 50%;
+        background: rgba(255,255,255,0.18);
+        filter: blur(0.5px);
+        pointer-events: none;
+      }
+      .wc-close {
+        background:
+          radial-gradient(circle at 38% 30%,
+            #ffb8b0 0%,
+            #ff6a60 22%,
+            #e63a32 60%,
+            #8c1410 100%);
+      }
+      .wc-min {
+        background:
+          radial-gradient(circle at 38% 30%,
+            #ffe8a0 0%,
+            #ffc850 22%,
+            #e08a10 62%,
+            #7a4408 100%);
+      }
+      .wc-max {
+        background:
+          radial-gradient(circle at 38% 30%,
+            #c4f0a8 0%,
+            #5cc850 22%,
+            #1a8a28 62%,
+            #084012 100%);
+      }
+      .wc:hover { filter: brightness(1.08); }
+      .wc:active { filter: brightness(0.85); transform: translateY(0.5px); }
+
+      /* ───── Unified toolbar under the title bar ───── */
+      .toolbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        background:
+          /* horizontal brushed lines, very subtle */
+          repeating-linear-gradient(0deg,
+            rgba(0,0,0,0.025) 0 1px,
+            transparent 1px 2px),
+          linear-gradient(180deg,
+            #d6d6d6 0%,
+            #b6b6b6 100%);
+        border-bottom: 1px solid #7a7a7a;
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.55),
+          inset 0 -1px 0 rgba(0,0,0,0.18);
+        flex: 0 0 auto;
+        font-size: 11px;
+        color: var(--ink);
+      }
+      .toolbar .tag {
+        color: var(--ink-dim);
+        margin-left: auto;
+        font-size: 11px;
+      }
+
+      /* ───── Window body (brushed aluminum) ───── */
+      .window-body {
+        flex: 1 1 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 10px;
+        min-height: 0;
+        overflow: hidden;
+        background:
+          repeating-linear-gradient(0deg,
+            rgba(0,0,0,0.020) 0 1px,
+            transparent 1px 2px),
+          linear-gradient(180deg, #dcdcdc 0%, #c0c0c0 100%);
+      }
+
+      /* ───── Panels (rounded cards) ───── */
+      .panel {
+        background: linear-gradient(180deg, var(--pn-1) 0%, var(--pn-2) 100%);
+        border: 1px solid var(--pn-edge);
+        border-radius: 6px;
+        padding: 0;
+        flex: 1 1 0;
+        min-width: 0;
+        box-shadow:
+          inset 0 1px 0 rgba(255,255,255,0.8),
+          0 1px 2px rgba(0,0,0,0.22);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+      .panel-body {
+        padding: 8px 10px 10px;
+        color: var(--ink);
+        flex: 1 1 auto;
+        overflow: auto;
+      }
+      .panel-title {
+        background: linear-gradient(180deg, var(--sh-1) 0%, var(--sh-2) 100%);
+        color: var(--sh-text);
+        padding: 4px 10px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        text-shadow: 0 1px 0 rgba(255,255,255,0.7);
+        border-bottom: 1px solid var(--sh-line);
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.7),
+          inset 0 -1px 0 rgba(0,0,0,0.06);
+        flex: 0 0 auto;
+      }
+
+      .row {
+        display: flex;
+        gap: 8px;
+        flex: 1 1 0;
+        min-height: 0;
+        align-items: stretch;
+      }
+
+      /* ───── Aqua "default" blue buttons (all of them) ───── */
+      select, button {
+        background:
+          var(--gloss),
+          linear-gradient(180deg,
+            #f4faff 0%,
+            #b8d8f4 18%,
+            #5a98dc 52%,
+            #2c70b8 68%,
+            #5a9cd8 100%);
+        color: var(--ink);
+        border: 1px solid var(--aq-4);
+        border-radius: 12px;
+        padding: 4px 14px;
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0;
+        text-shadow: 0 1px 0 rgba(255,255,255,0.55);
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.65),
+          inset 0 -1px 0 rgba(0,0,0,0.25),
+          0 0 8px var(--aq-glow),
+          0 1px 1px rgba(0,0,0,0.3);
+        cursor: pointer;
+        position: relative;
+      }
+      button:hover { filter: brightness(1.06); }
+      button:active, button.pressed {
+        background:
+          var(--gloss),
+          linear-gradient(180deg,
+            #1c4a8c 0%, #2c70b8 30%, #5a98dc 70%, #b8d8f4 100%);
+        box-shadow:
+          inset 0  2px 3px rgba(0,0,0,0.4),
+          inset 0 -1px 0 rgba(255,255,255,0.35),
+          0 1px 1px rgba(0,0,0,0.3);
+      }
+      button:disabled {
+        background:
+          var(--gloss),
+          linear-gradient(180deg,
+            #fafafa 0%, #e6e6e6 50%, #c4c4c4 100%);
+        color: #888;
+        border-color: #9a9a9a;
+        text-shadow: 0 1px 0 rgba(255,255,255,0.6);
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.85),
+          inset 0 -1px 0 rgba(0,0,0,0.08),
+          0 1px 1px rgba(0,0,0,0.15);
+        opacity: 0.75;
+        cursor: default;
+      }
+      /* btn-accent is now the same as default Aqua — keep selector for compatibility */
+      .btn-accent { filter: saturate(1.1); }
+      select {
+        padding-right: 26px;
+      }
+      select option { background: #fff; color: var(--ink); }
+
+      label { display: block; margin: 5px 0; color: var(--ink-dim); font-weight: 500; font-size: 11px; }
+
+      /* ───── Sliders ───── */
+      input[type=range] {
+        -webkit-appearance: none; appearance: none;
+        width: 100%; height: 16px;
+        background: transparent;
+        margin: 4px 0;
+      }
+      input[type=range]::-webkit-slider-runnable-track {
+        height: 5px;
+        background: linear-gradient(180deg, #a8a8a8 0%, #d8d8d8 100%);
+        border: 1px solid #707070;
+        border-radius: 3px;
+        box-shadow:
+          inset 0 1px 2px rgba(0,0,0,0.35),
+          0 1px 0 rgba(255,255,255,0.7);
+      }
+      input[type=range]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 14px; height: 14px;
+        /* Aqua blue marble */
+        background:
+          radial-gradient(circle at 35% 28%,
+            #eaf4ff 0%,
+            #a8d0f4 25%,
+            #4a8cd0 60%,
+            #1c4a8c 100%);
+        border: 1px solid var(--aq-4);
+        border-radius: 50%;
+        margin-top: -6px;
+        cursor: pointer;
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.7),
+          inset 0 -1px 0 rgba(0,0,0,0.25),
+          0 0 4px var(--aq-glow),
+          0 1px 2px rgba(0,0,0,0.4);
+      }
+
+      /* ───── Pills (Aqua chips) ───── */
+      .pill {
+        display: inline-block;
+        position: relative;
+        background:
+          var(--gloss),
+          linear-gradient(180deg,
+            #f4faff 0%,
+            #b8d8f4 18%,
+            #5a98dc 52%,
+            #2c70b8 68%,
+            #5a9cd8 100%);
+        color: var(--ink);
+        font-family: inherit;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 3px 11px;
+        margin: 3px 2px 3px 0;
+        border: 1px solid var(--aq-4);
+        border-radius: 11px;
+        letter-spacing: 0.02em;
+        text-shadow: 0 1px 0 rgba(255,255,255,0.55);
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.65),
+          inset 0 -1px 0 rgba(0,0,0,0.25),
+          0 0 6px var(--aq-glow),
+          0 1px 1px rgba(0,0,0,0.3);
+        user-select: none;
+        overflow: hidden;
+      }
+      .pill.on {
+        filter: saturate(1.25) brightness(1.06);
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.7),
+          inset 0 -1px 0 rgba(0,0,0,0.25),
+          0 0 14px rgba(110,180,250,0.95),
+          0 0 22px rgba(110,180,250,0.55),
+          0 1px 1px rgba(0,0,0,0.3);
+      }
+      .pill.recording {
+        background:
+          var(--gloss),
+          linear-gradient(180deg, #ff9c9c 0%, #ff5c5c 25%, #d02828 60%, #8c0c0c 100%);
+        color: #fff;
+        border-color: #4a0000;
+        text-shadow: 0 -1px 0 rgba(0,0,0,0.4);
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.55),
+          inset 0 -1px 0 rgba(0,0,0,0.25),
+          0 0 10px rgba(255,80,80,0.6),
+          0 1px 1px rgba(0,0,0,0.3);
+        animation: rec-pulse 0.45s ease-in-out infinite;
+      }
+      @keyframes rec-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.65; }
+      }
+      .pill.learning {
+        background:
+          var(--gloss),
+          linear-gradient(180deg, #e4b8f8 0%, #b070d8 35%, #6020a0 70%, #2a0840 100%) !important;
+        color: #fff !important;
+        border-color: #200840 !important;
+        text-shadow: 0 -1px 0 rgba(0,0,0,0.35) !important;
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.55),
+          inset 0 -1px 0 rgba(0,0,0,0.25),
+          0 0 12px rgba(180,90,240,0.55),
+          0 1px 1px rgba(0,0,0,0.3) !important;
+        animation: learn-pulse 0.7s ease-in-out infinite;
+      }
+      @keyframes learn-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+      }
+      body.learn-mode .pill { cursor: pointer; }
+      body.learn-mode .pill:hover { filter: brightness(1.05); }
+
+      .pill.pressed::after,
+      .pad.pressed::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        background: linear-gradient(180deg,
+          rgba(0,0,0,0.35) 0%,
+          rgba(0,0,0,0.15) 50%,
+          rgba(255,255,255,0.15) 100%);
+        box-shadow:
+          inset 0  2px 3px rgba(0,0,0,0.45),
+          inset 0 -1px 0 rgba(255,255,255,0.25);
+        pointer-events: none;
+        z-index: 1;
+      }
+      .pill.pressed,
+      .pad.pressed {
+        transform: translateY(1px);
+        filter: brightness(0.92);
+      }
+
+      .key {
+        background: linear-gradient(180deg, #f8f8f8 0%, #d0d0d0 50%, #bababa 100%);
+        color: var(--ink);
+        padding: 0 5px;
+        margin-left: 5px;
+        border-radius: 3px;
+        font-family: inherit;
+        font-size: 10px;
+        font-weight: 600;
+        text-shadow: 0 1px 0 rgba(255,255,255,0.7);
+        border: 1px solid #888;
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.9),
+          0 1px 0 rgba(255,255,255,0.4);
+        letter-spacing: 0;
+        color: #2a2a2a;
+      }
+      .pad.locked .key, .pad.recording .key, .pill.recording .key, .pill.learning .key, #rec-pill.armed .key {
+        background: linear-gradient(180deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.3) 100%);
+        color: #fff;
+        border-color: rgba(0,0,0,0.4);
+        text-shadow: 0 -1px 0 rgba(0,0,0,0.3);
+      }
+
+      #learn-btn.active {
+        background:
+          var(--gloss),
+          linear-gradient(180deg, #e4b8f8 0%, #b070d8 35%, #6020a0 70%, #2a0840 100%);
+        color: #fff;
+        border-color: #200840;
+        text-shadow: 0 0 6px #d488f8aa, 0 -1px 0 rgba(0,0,0,0.4);
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.5),
+          inset 0 -1px 0 rgba(0,0,0,0.25),
+          0 0 10px rgba(180,90,240,0.5),
+          0 1px 1px rgba(0,0,0,0.3);
+      }
+
+      /* ───── Setup note (Mail-style amber info banner) ───── */
+      #setup-note {
+        background: linear-gradient(180deg, #fff8d0 0%, #ffec90 100%);
+        border-radius: 5px;
+        border: 1px solid #c08a18;
+        padding: 6px 12px;
+        color: #4a3208;
+        font-size: 11px;
+        line-height: 1.45;
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.7),
+          0 1px 2px rgba(0,0,0,0.25);
+        flex: 0 0 auto;
+      }
+      #setup-note strong { color: #2a1a00; }
+      #setup-note em { color: #5a3c08; font-style: normal; font-weight: 600; }
+      #setup-note a { color: #2c70b8; font-weight: 600; }
+
+      /* ───── Meter ───── */
+      .meter {
+        height: 8px;
+        background: linear-gradient(180deg, #1a1a1a 0%, #0a0a0a 100%);
+        border: 1px solid #000;
+        border-radius: 3px;
+        overflow: hidden;
+        box-shadow: inset 0 1px 2px rgba(0,0,0,0.7), 0 1px 0 rgba(255,255,255,0.4);
+      }
+      .meter-fill {
+        height: 100%;
+        background: linear-gradient(to right, #6aa8f8 0%, #6aa8f8 55%, #ffcc33 75%, #ff4444 100%);
+        width: 0%;
+        transition: width 50ms linear;
+        box-shadow: 0 0 6px rgba(106,168,248,0.6);
+      }
+
+      /* ───── Sampler pads ───── */
+      .sampler-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 6px;
+      }
+      .pad {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        padding: 18px 6px;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        color: var(--ink);
+        background:
+          var(--gloss),
+          linear-gradient(180deg,
+            #f4faff 0%,
+            #b8d8f4 18%,
+            #5a98dc 52%,
+            #2c70b8 68%,
+            #5a9cd8 100%);
+        border: 1px solid var(--aq-4);
+        border-radius: 6px;
+        text-shadow: 0 1px 0 rgba(255,255,255,0.55);
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.65),
+          inset 0 -1px 0 rgba(0,0,0,0.25),
+          0 0 8px var(--aq-glow),
+          0 1px 2px rgba(0,0,0,0.4);
+        user-select: none;
+        cursor: pointer;
+      }
+      .pad.has-sample { filter: saturate(1.15) brightness(1.04); }
+      .pad.locked {
+        background:
+          var(--gloss),
+          linear-gradient(180deg, #ffd086 0%, #ff9a3c 32%, #c46410 65%, #6a3408 100%);
+        color: #fff;
+        border-color: #5a2c00;
+        text-shadow: 0 -1px 0 rgba(0,0,0,0.4);
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.5),
+          inset 0 -1px 0 rgba(0,0,0,0.3),
+          0 0 10px rgba(255,140,40,0.4),
+          0 1px 2px rgba(0,0,0,0.4);
+      }
+      .pad.playing { animation: pad-flash 250ms ease-out; }
+      @keyframes pad-flash {
+        0%   { box-shadow: 0 0 18px var(--aq-glow), 0 0 32px var(--aq-glow), inset 0 1px 0 rgba(255,255,255,0.7); }
+        100% { }
+      }
+      .pad.recording {
+        background:
+          var(--gloss),
+          linear-gradient(180deg, #ff9c9c 0%, #ff5c5c 25%, #d02828 60%, #8c0c0c 100%);
+        color: #fff;
+        border-color: #4a0000;
+        animation: rec-pulse 0.45s ease-in-out infinite;
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.55),
+          inset 0 -1px 0 rgba(0,0,0,0.25),
+          0 0 12px rgba(255,80,80,0.6),
+          0 1px 2px rgba(0,0,0,0.4);
+      }
+      #rec-pill.armed {
+        background:
+          var(--gloss),
+          linear-gradient(180deg, #ff9c9c 0%, #ff5c5c 25%, #d02828 60%, #8c0c0c 100%);
+        color: #fff;
+        border-color: #4a0000;
+        text-shadow: 0 -1px 0 rgba(0,0,0,0.4);
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.55),
+          inset 0 -1px 0 rgba(0,0,0,0.25),
+          0 0 10px rgba(255,80,80,0.6),
+          0 1px 1px rgba(0,0,0,0.3);
+        animation: rec-pulse 0.45s ease-in-out infinite;
+      }
+      #mode-pill { cursor: pointer; }
+
+      /* ───── Player panel (glossy black LCD strip) ───── */
+      #player-panel { flex: 0 0 auto; overflow: visible; }
+      .player-body {
+        padding: 8px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .lcd-area {
+        /* glossy black panel like iTunes album-art LCD, with a subtle dot grid */
+        background:
+          /* dotted grid */
+          radial-gradient(circle, rgba(140,200,255,0.13) 0.9px, transparent 1.3px) 0 0 / 10px 10px,
+          /* faint scanlines */
+          repeating-linear-gradient(0deg,
+            rgba(140,200,255,0.035) 0 1px,
+            transparent 1px 3px),
+          linear-gradient(180deg,
+            #2a2a2c 0%,
+            #131316 45%,
+            #050507 100%);
+        border: 1px solid #000;
+        border-radius: 6px;
+        padding: 10px 14px;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.18),
+          inset 0 -1px 0 rgba(0,0,0,0.6),
+          0 1px 0 rgba(255,255,255,0.55),
+          0 1px 3px rgba(0,0,0,0.45);
+      }
+      /* Status row that sits BELOW the screen — auto / tap / meter live here now. */
+      .player-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 2px;
+      }
+      .player-status .lcd-mini-meter { margin-left: 0; flex: 1; max-width: 260px; }
+      .lcd-stack { display: flex; flex-direction: column; gap: 2px; }
+      .lcd-label {
+        color: #8ac4f8;
+        font-family: inherit;
+        font-size: 9px;
+        font-weight: bold;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        text-shadow: 0 0 4px rgba(106,168,248,0.5);
+      }
+      .lcd {
+        background: transparent;
+        color: #6aa8f8;
+        font-family: 'Lucida Grande', ui-monospace, monospace;
+        padding: 0;
+        border: 0;
+        font-size: 15px;
+        font-weight: bold;
+        text-shadow: 0 0 8px rgba(106,168,248,0.85), 0 0 2px rgba(106,168,248,1);
+        min-width: 56px;
+        text-align: right;
+        letter-spacing: 0.04em;
+      }
+      .lcd.amber { color: #ffc878; text-shadow: 0 0 8px rgba(255,200,120,0.85), 0 0 2px rgba(255,200,120,1); }
+      .lcd-area .lcd-large {
+        font-size: 32px;
+        font-weight: bold;
+        line-height: 1;
+        letter-spacing: 0.06em;
+      }
+      .lcd-area .lcd-medium { font-size: 17px; line-height: 1; }
+
+      /* Beat LEDs */
+      .beat-leds {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-left: auto;
+        padding: 2px 4px;
+      }
+      /* Glowy rounded rectangles drawn ON the LCD plate (no recessed socket). */
+      .beat-led {
+        width: 30px;
+        height: 14px;
+        border-radius: 4px;
+        background: rgba(140,200,255,0.05);
+        border: 0;
+        box-shadow: none;
+        transition:
+          background 220ms cubic-bezier(0.2, 0, 0.4, 1),
+          box-shadow 220ms cubic-bezier(0.2, 0, 0.4, 1);
+      }
+      .beat-led.lit {
+        background: linear-gradient(180deg, #cfeaff 0%, #6aa8f8 45%, #2c70b8 100%);
+        box-shadow:
+          inset 0  1px 1px rgba(255,255,255,0.55),
+          0 0  10px rgba(106,168,248,0.85),
+          0 0  26px rgba(106,168,248,0.55),
+          0 0  60px rgba(106,168,248,0.30);
+        transition: none;
+      }
+      .beat-led.lit-1 {
+        background: linear-gradient(180deg, #ffe2b0 0%, #ffa850 45%, #b05818 100%);
+        box-shadow:
+          inset 0  1px 1px rgba(255,255,255,0.55),
+          0 0  10px rgba(255,170,80,0.85),
+          0 0  26px rgba(255,170,80,0.55),
+          0 0  60px rgba(255,170,80,0.28);
+        transition: none;
+      }
+
+      /* Spectrum visualizer on the screen. */
+      .lcd-viz {
+        flex: 1;
+        height: 40px;
+        min-width: 80px;
+        max-width: 280px;
+        display: block;
+        align-self: center;
+      }
+
+      .lcd-mini-meter {
+        width: 70px;
+        height: 6px;
+        background: #0a0a0c;
+        border: 1px solid #000;
+        border-radius: 2px;
+        overflow: hidden;
+        margin-left: 6px;
+        box-shadow: inset 0 1px 2px rgba(0,0,0,0.9);
+      }
+      .lcd-mini-meter > .meter-fill {
+        height: 100%;
+        background: linear-gradient(to right, #6aa8f8 0%, #6aa8f8 55%, #ffcc33 75%, #ff4444 100%);
+        width: 0%;
+        transition: width 50ms linear;
+        box-shadow: 0 0 6px rgba(106,168,248,0.6);
+      }
+
+      .player-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .player-controls .player-slider {
+        display: flex; align-items: center; gap: 8px;
+        margin: 0;
+        flex: 1;
+        min-width: 200px;
+        max-width: 420px;
+        color: var(--ink-dim);
+        font-weight: 500;
+        font-size: 11px;
+      }
+      .player-controls .player-slider input { flex: 1; }
+      .player-controls select { max-width: 240px; }
+    </style>
+  </head>
+  <body>
+    <div class="window">
+      <div id="title-bar">
+        <div class="window-controls">
+          <button class="wc wc-close" title="Close"></button>
+          <button class="wc wc-min" title="Minimize"></button>
+          <button class="wc wc-max" title="Zoom"></button>
+        </div>
+        <h1>DJ-AMP</h1>
+      </div>
+
+      <div class="toolbar">
+        <button id="learn-btn">Learn</button>
+        <button id="reset-bindings-btn">Reset map</button>
+        <span class="tag">Click Learn, click a pad, press a key/MIDI button.</span>
+      </div>
+
+      <div class="window-body">
+
+        <div id="setup-note">
+          <strong>Setup:</strong> Open <a href="https://open.spotify.com" target="_blank">Spotify Web Player</a> in another tab,
+          start a track, click <em>Capture tab</em> below, choose <strong>Chrome Tab</strong> → Spotify tab → tick <strong>Share tab audio</strong>.
+          <br><span style="opacity:0.7;font-size:11px;">Alternative: BlackHole + Multi-Output Device, then pick from the device dropdown.</span>
+        </div>
+
+        <div class="panel" id="player-panel">
+          <div class="panel-title">Player</div>
+          <div class="panel-body player-body">
+            <div class="lcd-area">
+              <div class="lcd-stack">
+                <div class="lcd-label">BPM</div>
+                <span class="lcd lcd-large" id="bpm-display">---.-</span>
+              </div>
+              <div class="lcd-stack">
+                <div class="lcd-label">BAR</div>
+                <span class="lcd lcd-medium amber" id="bar-display">- / -</span>
+              </div>
+              <canvas id="lcd-viz" class="lcd-viz"></canvas>
+              <div class="beat-leds" id="beat-leds">
+                <div class="beat-led" data-beat="0"></div>
+                <div class="beat-led" data-beat="1"></div>
+                <div class="beat-led" data-beat="2"></div>
+                <div class="beat-led" data-beat="3"></div>
+              </div>
+            </div>
+            <div class="player-status">
+              <span class="pill" id="bpm-conf">auto</span>
+              <span class="pill" id="tap-pill">Tap <span class="key">␣</span></span>
+              <div class="lcd-mini-meter"><div class="meter-fill" id="meter"></div></div>
+            </div>
+            <div class="player-controls">
+              <button id="tab-btn" class="btn-accent">Capture tab</button>
+              <select id="device-select"></select>
+              <button id="start-btn">Use device</button>
+              <button id="stop-btn" disabled>Stop</button>
+              <button id="reset-btn">Reset BPM</button>
+              <label class="player-slider">Master <input type="range" id="master-vol" min="0" max="1.5" step="0.01" value="1"></label>
+            </div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="panel">
+            <div class="panel-title">Filter</div>
+            <div class="panel-body">
+              <div style="margin-bottom:6px;"><span class="pill" id="filter-sweep-pill">Sweep <span class="key">F</span></span></div>
+              <label>Cutoff <input type="range" id="filter-cutoff" min="80" max="20000" step="1" value="20000"></label>
+              <label>Q <input type="range" id="filter-q" min="0.5" max="20" step="0.1" value="1"></label>
+              <label>Type
+                <select id="filter-type">
+                  <option value="lowpass">low-pass</option>
+                  <option value="highpass">high-pass</option>
+                  <option value="bandpass">band-pass</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title">Sends</div>
+            <div class="panel-body">
+              <div style="margin-bottom:4px;">
+                <span class="pill" id="delay-throw-pill">Delay throw <span class="key">T</span></span>
+              </div>
+              <div style="margin-bottom:4px;">
+                <span class="pill" id="reverb-throw-pill">Reverb throw <span class="key">R</span></span>
+              </div>
+              <label>Delay <input type="range" id="delay-send" min="0" max="1" step="0.01" value="0"></label>
+              <label>Reverb <input type="range" id="reverb-send" min="0" max="1" step="0.01" value="0"></label>
+            </div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="panel">
+            <div class="panel-title">Gate (hold)</div>
+            <div class="panel-body">
+              <div><span class="pill" id="gate-kill">Kill <span class="key">G</span></span></div>
+              <div><span class="pill" id="gate-1-4">1/4 <span class="key">1</span></span></div>
+              <div><span class="pill" id="gate-1-8">1/8 <span class="key">2</span></span></div>
+              <div><span class="pill" id="gate-1-16">1/16 <span class="key">3</span></span></div>
+              <div><span class="pill" id="gate-1-32">1/32 <span class="key">4</span></span></div>
+              <div><span class="pill" id="gate-1-64">1/64 <span class="key">5</span></span></div>
+              <div><span class="pill" id="gate-1-128">1/128 <span class="key">6</span></span></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title">Loop (hold)</div>
+            <div class="panel-body">
+              <div><span class="pill" id="loop-bar1">1 bar <span class="key">Q</span></span></div>
+              <div><span class="pill" id="loop-beat2">2 beat <span class="key">W</span></span></div>
+              <div><span class="pill" id="loop-beat1">1 beat <span class="key">A</span></span></div>
+              <div><span class="pill" id="loop-beat-half">1/2 beat <span class="key">S</span></span></div>
+              <div><span class="pill" id="loop-beat-quarter">1/4 beat <span class="key">D</span></span></div>
+              <div><span class="pill" id="loop-beat-eighth">1/8 beat <span class="key">E</span></span></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title">EQ kill (hold)</div>
+            <div class="panel-body">
+              <div><span class="pill" id="hp-kill-pill">Low kill <span class="key">L</span></span></div>
+              <div><span class="pill" id="lp-kill-pill">High kill <span class="key">H</span></span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="panel">
+            <div class="panel-title">Mangle (hold)</div>
+            <div class="panel-body">
+              <div><span class="pill" id="bitcrush-5">Crush 5b <span class="key">B</span></span></div>
+              <div><span class="pill" id="bitcrush-3">Crush 3b <span class="key">N</span></span></div>
+              <div><span class="pill" id="reverse-pill">Reverse <span class="key">V</span></span></div>
+              <div><span class="pill" id="freeze-pill">Freeze <span class="key">C</span></span></div>
+              <div><span class="pill" id="tape-stop-pill">Tape stop <span class="key">Z</span></span></div>
+              <label style="margin-top:8px;">Loop pitch <input type="range" id="loop-pitch" min="0.25" max="2" step="0.01" value="1"></label>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title">Sampler</div>
+            <div class="panel-body">
+              <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
+                <span class="pill" id="rec-pill">REC <span class="key">`</span></span>
+                <span class="pill" id="mode-pill" title="Click to toggle one-shot / hold">HOLD</span>
+              </div>
+              <div class="sampler-grid">
+                <span class="pad" id="pad-0" data-pad="0">1 <span class="key">7</span></span>
+                <span class="pad" id="pad-1" data-pad="1">2 <span class="key">8</span></span>
+                <span class="pad" id="pad-2" data-pad="2">3 <span class="key">9</span></span>
+                <span class="pad" id="pad-3" data-pad="3">4 <span class="key">0</span></span>
+                <span class="pad" id="pad-4" data-pad="4">5 <span class="key">U</span></span>
+                <span class="pad" id="pad-5" data-pad="5">6 <span class="key">I</span></span>
+                <span class="pad" id="pad-6" data-pad="6">7 <span class="key">O</span></span>
+                <span class="pad locked has-sample" id="pad-7" data-pad="7">📢 <span class="key">P</span></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title">MIDI</div>
+            <div class="panel-body">
+              <div id="midi-status" style="color:#5a5a5a;">not connected</div>
+              <div style="margin-top:6px; color:#7a7a7a; font-size:11px;">
+                Last message:
+              </div>
+              <div id="midi-last" style="margin-top:2px; font-size:11px; color:#2c70b8; font-family:'Lucida Grande', monospace;"></div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /.window-body -->
+    </div><!-- /.window -->
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
