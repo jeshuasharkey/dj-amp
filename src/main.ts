@@ -204,9 +204,10 @@ async function start(mode: 'device' | 'tab') {
   // through gate + FX the same way live audio does.
   looper = await Looper.create(ctx, source, masterGate.node, beat);
 
-  // Sampler shares the looper's ring buffer (via grab) and plays back through the
-  // same master path so samples get the gate/FX treatment too.
-  sampler = new Sampler(ctx, looper, masterGate.node);
+  // Sampler shares the looper's ring buffer (via grab) but plays back POST-gate
+  // (straight into fx.input), so samples punch through gate kills/chops and aren't
+  // dragged by loop-only effects like tape stop. They still get the global FX flavor.
+  sampler = new Sampler(ctx, looper, fx.input);
   sampler.onSampleEnded = (idx) => padElements[idx]?.classList.remove('playing');
   // Mark pads that have preloaded samples (e.g., the locked airhorn)
   for (let i = 0; i < PAD_COUNT; i++) {
@@ -657,14 +658,12 @@ bindings.register('tape-stop', {
     tapeStopActive = true;
     tapeStopPill.classList.add('on');
     looper?.setPlaybackRate(0.001, 800);
-    sampler?.setAllPlaybackRate(0.001, 800);
   },
   up: () => {
     if (!tapeStopActive) return;
     tapeStopActive = false;
     tapeStopPill.classList.remove('on');
     looper?.setPlaybackRate(parseFloat(loopPitch.value), 200);
-    sampler?.setAllPlaybackRate(1.0, 200); // samples return to natural pitch, loop slider is loop-only
   },
 }, { pill: tapeStopPill, default: { source: 'key', code: 'KeyZ' } });
 

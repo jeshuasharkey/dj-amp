@@ -73,18 +73,6 @@ export class Sampler {
     this.stopPad(padIdx);
   }
 
-  // Slow / restore every active sample's playback rate (tape-stop affects samples too).
-  setAllPlaybackRate(rate: number, rampMs: number): void {
-    const r = Math.max(0.0001, rate);
-    const t = this.ctx.currentTime;
-    for (const src of this.active) {
-      if (!src) continue;
-      src.playbackRate.cancelScheduledValues(t);
-      src.playbackRate.setValueAtTime(src.playbackRate.value, t);
-      src.playbackRate.linearRampToValueAtTime(r, t + rampMs / 1000);
-    }
-  }
-
   stopPad(padIdx: number): void {
     const src = this.active[padIdx];
     if (!src) return;
