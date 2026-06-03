@@ -1,15 +1,35 @@
-// Real-time BPM detection via low-band energy onsets + inter-onset autocorrelation,
-// plus a tap-tempo fallback for setting the downbeat. The two combine well:
-// auto-detection picks the BPM, the user taps once on "1" to establish phase.
+// Real-time BPM detection by autocorrelation of a bass-weighted spectral-flux
+// onset envelope, with a perceptual tempo prior for octave resolution and a
+// comb-matched phase estimate for the downbeat. A tap-tempo fallback lets the
+// user pin the BPM and the "1" by hand; taps win over auto-detection for a few
+// seconds so a manual sync isn't immediately dragged away.
+//
+// Why autocorrelation rather than inter-onset-interval medians: the envelope is
+// integrated over several seconds, so a missed kick or a doubled detection only
+// dents one lag's score instead of poisoning the whole estimate. The dominant
+// lag is the beat period (or one of its octaves), and the prior picks the octave
+// a listener would tap to.
 
 export class BeatTracker {
   private ctx: AudioContext;
   private analyser: AnalyserNode;
   private freqData: Uint8Array<ArrayBuffer>;
-  private energyHistory: number[] = [];
-  private onsets: number[] = [];
-  private historySize = 43;
-  private rafId: number | null = null;
+  private prevMag: Float32Array;
+  private prevValid = false;
+
+  // Onset-strength envelope, sampled once per animation frame into a ring buffer.
+  // We track the real frame interval (meanDt) instead of assuming 60fps, so lag→
+  // tempo conversion is correct on 120Hz displays and the math is unit-clean.
+  private static readonly ENV_LEN = 1024;
+  private env = new Float32Array(BeatTracker.ENV_LEN);
+  private work = new Float32Array(BeatTracker.ENV_LEN);
+  private envWrite = 0;
+  private envCount = 0;
+  private meanDt = 1 / 60;
+  private lastTick = 0;
+  private lastEnvTime = 0;
+  private lastEstimate = 0;
+  private recentBpm: number[] = []; // recent estimates, median-voted for stability
 
   bpm = 120;
   bpmConfidence = 0;
@@ -17,17 +37,23 @@ export class BeatTracker {
   beatsPerBar = 4;
 
   private tapTimes: number[] = [];
+  private tapLockUntil = 0;
+
+  private rafId: number | null = null;
 
   constructor(ctx: AudioContext, source: AudioNode) {
     this.ctx = ctx;
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 1024;
-    this.analyser.smoothingTimeConstant = 0;
+    this.analyser.smoothingTimeConstant = 0; // raw frames — flux needs true frame-to-frame deltas
     this.freqData = new Uint8Array(new ArrayBuffer(this.analyser.frequencyBinCount));
+    this.prevMag = new Float32Array(this.analyser.frequencyBinCount);
     source.connect(this.analyser);
   }
 
   start(): void {
+    this.lastTick = this.ctx.currentTime;
+    this.prevValid = false;
     const loop = () => {
       this.tick();
       this.rafId = requestAnimationFrame(loop);
@@ -41,78 +67,211 @@ export class BeatTracker {
   }
 
   private tick(): void {
-    this.analyser.getByteFrequencyData(this.freqData);
-    const nyquist = this.ctx.sampleRate / 2;
-    const binHz = nyquist / this.freqData.length;
-    const lowStart = Math.max(1, Math.floor(40 / binHz));
-    const lowEnd = Math.min(this.freqData.length - 1, Math.floor(200 / binHz));
-    let energy = 0;
-    for (let i = lowStart; i <= lowEnd; i++) energy += this.freqData[i];
-
-    this.energyHistory.push(energy);
-    if (this.energyHistory.length > this.historySize) this.energyHistory.shift();
-    const avg = this.energyHistory.reduce((a, b) => a + b, 0) / this.energyHistory.length;
-
     const now = this.ctx.currentTime;
-    const last = this.onsets[this.onsets.length - 1] ?? -1;
-    // Threshold: significantly above moving avg, and not within 150ms of last onset
-    if (energy > avg * 1.5 && energy > 60 && now - last > 0.15) {
-      this.onsets.push(now);
-      if (this.onsets.length > 32) this.onsets.shift();
-      this.estimateBPM();
-      this.alignPhase(now);
-    }
-  }
+    const dt = now - this.lastTick;
+    this.lastTick = now;
 
-  // Once we're confident in the BPM, seed the downbeat from the most recent onset
-  // so the bar phase has an anchor without requiring a user tap. On every later
-  // onset, nudge the anchor toward the nearest beat boundary so we track drift
-  // and recover from a noisy initial guess. Picks an arbitrary beat as "1" —
-  // good enough for a visual tempo check; the user can still tap to reset phase.
-  private alignPhase(onsetTime: number): void {
-    if (this.bpmConfidence < 0.3) return;
-    if (this.downbeat === null) {
-      this.downbeat = onsetTime;
+    if (dt <= 0) return;
+    // A long gap means the tab was backgrounded / RAF was paused. The envelope is
+    // only meaningful as a continuous signal, so drop it and rebuild rather than
+    // autocorrelating across a time hole.
+    if (dt > 0.5) {
+      this.envCount = 0;
+      this.envWrite = 0;
+      this.recentBpm = [];
+      this.prevValid = false;
       return;
     }
-    const beatDur = 60 / this.bpm;
-    const elapsed = onsetTime - this.downbeat;
-    const wrapped = ((elapsed % beatDur) + beatDur) % beatDur;
-    // Signed offset to the nearest beat boundary, in (-beatDur/2, beatDur/2].
-    const offset = wrapped > beatDur / 2 ? wrapped - beatDur : wrapped;
-    // Gentle correction so a single off-beat onset can't yank the phase.
-    this.downbeat += offset * 0.15;
+    // A merely janky frame (a hitch, not a sleep): keep the envelope intact but
+    // skip this irregular sample so it doesn't smear the uniform-spacing
+    // assumption — just re-prime the flux reference and move on.
+    if (dt > 0.05) {
+      this.analyser.getByteFrequencyData(this.freqData);
+      this.computeODF();
+      this.prevValid = true;
+      return;
+    }
+    this.meanDt = this.meanDt * 0.95 + dt * 0.05;
+
+    this.analyser.getByteFrequencyData(this.freqData);
+    const odf = this.computeODF();
+    this.lastEnvTime = now;
+
+    // First good frame after a (re)start primes the flux reference without
+    // emitting the artificial "everything just appeared" spike.
+    if (!this.prevValid) {
+      this.prevValid = true;
+      return;
+    }
+
+    this.env[this.envWrite] = odf;
+    this.envWrite = (this.envWrite + 1) % BeatTracker.ENV_LEN;
+    if (this.envCount < BeatTracker.ENV_LEN) this.envCount++;
+
+    if (now - this.lastEstimate > 0.2) {
+      this.lastEstimate = now;
+      this.estimate(now);
+    }
   }
 
-  private estimateBPM(): void {
-    if (this.onsets.length < 6) return;
-    const intervals: number[] = [];
-    for (let i = 1; i < this.onsets.length; i++) {
-      const dt = this.onsets[i] - this.onsets[i - 1];
-      if (dt > 0.2 && dt < 1.5) intervals.push(dt);
+  // Half-wave-rectified spectral flux, weighted toward the low end so the kick
+  // dominates (the most reliable beat cue in dance material) while mids still
+  // contribute snare/hat transients. Returns the per-frame onset strength.
+  private computeODF(): number {
+    const f = this.freqData;
+    const prev = this.prevMag;
+    const nyquist = this.ctx.sampleRate / 2;
+    const binHz = nyquist / f.length;
+    const lowEnd = Math.min(f.length - 1, Math.max(1, Math.floor(200 / binHz)));
+    const midEnd = Math.min(f.length - 1, Math.floor(4000 / binHz));
+
+    let flux = 0;
+    for (let i = 1; i <= lowEnd; i++) {
+      const d = f[i] - prev[i];
+      if (d > 0) flux += d;
+      prev[i] = f[i];
     }
-    if (intervals.length < 4) return;
+    for (let i = lowEnd + 1; i <= midEnd; i++) {
+      const d = f[i] - prev[i];
+      if (d > 0) flux += d * 0.3;
+      prev[i] = f[i];
+    }
+    for (let i = midEnd + 1; i < f.length; i++) prev[i] = f[i];
+    return flux;
+  }
 
-    // Fold each interval into 90-180 BPM range so doubletime/halftime collapse together.
-    // The previous 60-120 range biased low (modern DJ music is usually 110-140 BPM),
-    // so detection consistently came back at half-time — this lands it in the right octave.
-    const folded = intervals.map(iv => {
-      let v = iv;
-      while (v < 60 / 180) v *= 2;
-      while (v > 60 / 90) v /= 2;
-      return v;
-    });
-    folded.sort((a, b) => a - b);
-    const median = folded[Math.floor(folded.length / 2)];
-    const bpm = 60 / median;
+  private estimate(now: number): void {
+    if (now < this.tapLockUntil) return; // a manual tap owns the tempo for now
 
-    // Smooth a little so the displayed BPM doesn't jitter every onset.
-    this.bpm = this.bpmConfidence > 0.2 ? this.bpm * 0.7 + bpm * 0.3 : bpm;
-    this.bpmConfidence = Math.min(1, intervals.length / 16);
+    // Use the most recent ~8s of envelope: long enough for sharp autocorrelation
+    // peaks, short enough to follow a real tempo change in a mix.
+    const win = Math.min(this.envCount, Math.round(8 / this.meanDt));
+    if (win < Math.round(2.5 / this.meanDt)) return; // need a couple of seconds first
+
+    // Flatten the ring into chronological order (work[0] oldest, work[win-1] newest).
+    const start = ((this.envWrite - win) % BeatTracker.ENV_LEN + BeatTracker.ENV_LEN) % BeatTracker.ENV_LEN;
+    const work = this.work;
+    let mean = 0;
+    for (let j = 0; j < win; j++) {
+      const v = this.env[(start + j) % BeatTracker.ENV_LEN];
+      work[j] = v;
+      mean += v;
+    }
+    mean /= win;
+
+    const minBpm = 70, maxBpm = 180;
+    const lagMin = Math.max(1, Math.round(60 / (maxBpm * this.meanDt)));
+    const lagMax = Math.min(win - 1, Math.round(60 / (minBpm * this.meanDt)));
+    if (lagMax <= lagMin) return;
+
+    // Normalized autocorrelation: ac[lag]/energy behaves like a correlation
+    // coefficient in [-1, 1], so the confidence threshold means the same thing
+    // regardless of how loud the input is.
+    let energy = 0;
+    for (let i = 0; i < win; i++) { const d = work[i] - mean; energy += d * d; }
+    if (energy <= 0) return;
+
+    const ac = new Float32Array(lagMax + 1);
+    for (let lag = lagMin; lag <= lagMax; lag++) {
+      let s = 0;
+      for (let i = lag; i < win; i++) s += (work[i] - mean) * (work[i - lag] - mean);
+      ac[lag] = s / energy;
+    }
+
+    // Score every lag by autocorrelation × a log-normal tempo prior (centered on a
+    // typical dance tempo). The prior pulls the estimate toward the octave a
+    // listener would tap, instead of locking onto whichever raw lag is tallest —
+    // half/double-time are also strong peaks, so without it the value flip-flops.
+    const prior = (bpm: number) => {
+      const x = Math.log2(bpm / 125) / 0.5;
+      return Math.exp(-0.5 * x * x);
+    };
+    let bestLag = lagMin, bestScore = -Infinity;
+    for (let lag = lagMin; lag <= lagMax; lag++) {
+      const score = ac[lag] * prior(60 / (lag * this.meanDt));
+      if (score > bestScore) { bestScore = score; bestLag = lag; }
+    }
+
+    const peak = ac[bestLag];
+    // Nothing periodic enough this frame: hold the last tempo, let confidence ebb.
+    if (peak < 0.05) { this.bpmConfidence *= 0.9; return; }
+
+    // Parabolic interpolation around the chosen lag for sub-bin BPM precision.
+    let refined = bestLag;
+    if (bestLag > lagMin && bestLag < lagMax) {
+      const y0 = ac[bestLag - 1], y1 = ac[bestLag], y2 = ac[bestLag + 1];
+      const denom = y0 - 2 * y1 + y2;
+      if (denom !== 0) {
+        const delta = 0.5 * (y0 - y2) / denom;
+        if (Math.abs(delta) <= 1) refined = bestLag + delta;
+      }
+    }
+    let bpm = 60 / (refined * this.meanDt);
+    const confidence = Math.min(1, peak * 2);
+    const prevConf = this.bpmConfidence;
+
+    // Octave lock: once a tempo is held, fold a half/double-time estimate back into
+    // the held octave so the displayed BPM can't suddenly jump by 2×.
+    if (prevConf > 0.2) {
+      while (bpm > this.bpm * 1.4) bpm /= 2;
+      while (bpm < this.bpm * 0.72) bpm *= 2;
+    }
+
+    // Median-vote over ~1.2s of estimates, then glide toward the vote. The median
+    // discards single-frame outliers outright; the glide keeps the number from
+    // twitching. Together these are what stop the display being "chaotic".
+    this.recentBpm.push(bpm);
+    if (this.recentBpm.length > 6) this.recentBpm.shift();
+    const voted = [...this.recentBpm].sort((a, b) => a - b)[this.recentBpm.length >> 1];
+
+    if (prevConf < 0.2) this.bpm = voted;                 // first lock — jump there
+    else this.bpm = this.bpm * 0.85 + voted * 0.15;       // otherwise glide gently
+    this.bpmConfidence = Math.max(confidence, prevConf * 0.8);
+    this.alignPhase(work, win, this.bpmConfidence);
+  }
+
+  // Find the beat phase by comb-matching the envelope at the detected period: the
+  // offset whose pulse train best sums the recent onset energy is the latest beat.
+  // Seeds the downbeat when there's none (an arbitrary beat becomes "1", same as
+  // before), then nudges gently so a single noisy frame can't yank the grid.
+  private alignPhase(work: Float32Array, win: number, confidence: number): void {
+    if (confidence < 0.35) return;
+    const beatDur = 60 / this.bpm;
+    const pSamp = beatDur / this.meanDt;
+    if (!(pSamp > 1)) return;
+
+    const steps = 64;
+    const newest = win - 1;
+    const maxK = Math.min(12, Math.floor(newest / pSamp));
+    let bestOff = 0, bestSum = -Infinity;
+    for (let s = 0; s < steps; s++) {
+      const off = (s / steps) * pSamp;
+      let sum = 0;
+      for (let k = 0; k <= maxK; k++) {
+        const idx = Math.round(newest - off - k * pSamp);
+        if (idx < 0) break;
+        sum += work[idx];
+      }
+      if (sum > bestSum) { bestSum = sum; bestOff = off; }
+    }
+    const beatTime = this.lastEnvTime - bestOff * this.meanDt;
+
+    if (this.downbeat === null) {
+      this.downbeat = beatTime;
+      return;
+    }
+    const elapsed = beatTime - this.downbeat;
+    const wrapped = ((elapsed % beatDur) + beatDur) % beatDur;
+    const offset = wrapped > beatDur / 2 ? wrapped - beatDur : wrapped;
+    // Correct genuine drift but ignore near-half-beat "corrections": off-beat
+    // energy (hats/claps) can rival the kick and flip the comb to the wrong pulse,
+    // which would make the beat grid lurch by half a beat. Gentle time constant.
+    if (Math.abs(offset) < beatDur * 0.3) this.downbeat += offset * 0.08;
   }
 
   // User tap on every beat (or every 1). Two consecutive taps already give a BPM.
-  // The most recent tap is also treated as a downbeat anchor for phase.
+  // The most recent tap is also treated as a downbeat anchor for phase, and the
+  // tempo is locked briefly so auto-detection doesn't immediately pull it off.
   tap(): void {
     const now = this.ctx.currentTime;
     if (this.tapTimes.length && now - this.tapTimes[this.tapTimes.length - 1] > 2) {
@@ -126,14 +285,18 @@ export class BeatTracker {
       const avg = sum / (this.tapTimes.length - 1);
       this.bpm = 60 / avg;
       this.bpmConfidence = 1;
+      this.tapLockUntil = now + 6;
     }
     this.downbeat = now;
   }
 
   reset(): void {
     this.tapTimes = [];
-    this.onsets = [];
-    this.energyHistory = [];
+    this.tapLockUntil = 0;
+    this.envCount = 0;
+    this.envWrite = 0;
+    this.recentBpm = [];
+    this.prevValid = false;
     this.downbeat = null;
     this.bpmConfidence = 0;
   }

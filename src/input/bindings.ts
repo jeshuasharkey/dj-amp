@@ -185,6 +185,7 @@ export class BindingManager {
       if (c.startsWith('Digit')) return c.slice(5);
       if (c.startsWith('Numpad')) return 'np' + c.slice(6);
       if (c === 'Space') return '␣';
+      if (c === 'Backquote') return '`';
       return c;
     }
     return `M${b.note}`;

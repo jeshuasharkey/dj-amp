@@ -1,18 +1,23 @@
-import type { Looper } from './looper';
+import { TapRecorder } from './recorder';
 
 // 8-pad sampler. Workflow:
-//   - Hold REC + hold pad → records into that pad while held (uses the Looper's
-//     ring buffer to grab the elapsed window when the pad releases).
+//   - Hold REC + hold pad → records into that pad while held (its own ring buffer
+//     grabs the elapsed window when the pad releases).
 //   - Without REC, pressing a pad triggers its sample. The play mode (one-shot
 //     vs hold-to-loop) is controlled by the parent via the `holdMode` arg.
 // One pad is permanently locked to a synthesized airhorn and cannot be recorded over.
+//
+// The sampler sits at the very end of the chain: its recorder taps the post-FX
+// output, so pads capture audio with all effects (filter/delay/reverb/bitcrush)
+// printed in, and playback goes straight to the master out so it's unaffected by
+// the FX chain.
 
 export const PAD_COUNT = 8;
 export const AIRHORN_PAD = 7;
 
 export class Sampler {
   private ctx: AudioContext;
-  private looper: Looper;
+  private recorder: TapRecorder;
   private output: AudioNode;
   private samples: (AudioBuffer | null)[] = Array(PAD_COUNT).fill(null);
   private locked: boolean[] = Array(PAD_COUNT).fill(false);
@@ -21,14 +26,21 @@ export class Sampler {
 
   onSampleEnded: ((padIdx: number) => void) | null = null;
 
-  constructor(ctx: AudioContext, looper: Looper, output: AudioNode) {
+  constructor(ctx: AudioContext, recorder: TapRecorder, output: AudioNode) {
     this.ctx = ctx;
-    this.looper = looper;
+    this.recorder = recorder;
     this.output = output;
     // Airhorn pad is locked from the start so it can't be recorded over;
     // the buffer fills in once the .wav decodes (a few ms locally).
     this.locked[AIRHORN_PAD] = true;
     loadAirhorn(this.ctx).then(buf => { this.samples[AIRHORN_PAD] = buf; });
+  }
+
+  // `source` is the post-FX signal to record from; `output` is the master-out
+  // node to play into (downstream of the FX chain).
+  static async create(ctx: AudioContext, source: AudioNode, output: AudioNode): Promise<Sampler> {
+    const recorder = await TapRecorder.create(ctx, source);
+    return new Sampler(ctx, recorder, output);
   }
 
   startRecord(padIdx: number): void {
@@ -44,7 +56,7 @@ export class Sampler {
     const dur = this.ctx.currentTime - start;
     if (dur < 0.04) return false; // too short — ignore accidental taps
     const samples = Math.floor(dur * this.ctx.sampleRate);
-    const buf = await this.looper.grab(samples);
+    const buf = await this.recorder.grab(samples);
     this.samples[padIdx] = buf;
     return true;
   }

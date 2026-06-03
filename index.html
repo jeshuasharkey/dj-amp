@@ -3,11 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DJ-AMP</title>
+    <title>WEBDJ</title>
     <link rel="icon" href="data:,">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Lucida+Grande&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Mona+Sans:wdth,wght@75..125,200..900&family=Special+Gothic+Condensed+One&display=swap" rel="stylesheet">
     <style>
       :root {
         color-scheme: light;
@@ -46,6 +46,17 @@
         --aq-4: #1c4a8c;
         --aq-glow: rgba(70,140,230,0.55);
 
+        /* "recording / armed / learning" active state — recolors the lit bloom
+           plus the inner + outer glow so the whole control reads red. */
+        --rec-bloom: radial-gradient(circle at 50% 55%,
+          #ffdada 0%,
+          #ff8c8c 20%,
+          #d83838 52%,
+          #5e1616 80%,
+          #1e0808 100%);
+        --rec-glow: rgba(255,70,70,0.9);
+        --rec-inner: rgba(95,0,0,0.72);
+
         /* traffic lights */
         --tl-red-1: #ff8a82;
         --tl-red-2: #ff5f57;
@@ -70,20 +81,42 @@
           rgba(255,255,255,0.55) 50%,
           rgba(255,255,255,0)    50%,
           rgba(255,255,255,0)    100%);
+
+        /* ───── pan-knob.html control kit ─────
+           Two master scales. --s drives the dials (knob.ts reads it too);
+           --sb drives the rect FX buttons + drum pads. The .pill / .pad /
+           .sampler-grid rules opt into --sb via `--s: var(--sb)`, so every
+           calc(base * var(--s)) inside them resolves at the button/pad scale
+           automatically. */
+        --s: 0.5;     /* dials */
+        --sb: 0.75;   /* FX buttons + drum pads */
+        /* Inset bevel geometry shared by the drum pads + rect FX buttons.
+           Raw base px — each must be multiplied by var(--s) at the use site,
+           NOT here: a calc() against --s on :root bakes in the root (dial)
+           scale and never rescales when .pill/.pad set --s: var(--sb). */
+        --edge-size: 10.5px;     /* inset offset from the edge (×--s at use site) */
+        --edge-spread: -8.5px;   /* band thickness (×--s at use site) */
+        --edge-falloff: 1px;     /* band softness (×--s at use site) */
+        --white-alpha: 0.15;     /* L/R highlight opacity */
+        --black-alpha: 0.73;     /* T/B shadow opacity */
       }
 
-      html, body { margin: 0; padding: 0; height: 100%; }
+      html, body { margin: 0; padding: 0; }
       body {
-        font-family: 'Lucida Grande', -apple-system, system-ui, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+        font-family: 'Special Gothic Condensed One', -apple-system, system-ui, 'Helvetica Neue', Helvetica, Arial, sans-serif;
         background: url('/desktop-bg.png') center / cover no-repeat fixed, #0c0a26;
         color: var(--ink);
-        font-size: 12px;
+        font-size: 14px;
+        text-transform: uppercase;   /* uppercase all text */
+        letter-spacing: 0.02em;      /* +2% tracking, inherited globally */
         padding: 24px;
         line-height: 1.4;
-        height: 100vh;
-        overflow: hidden;
+        min-height: 100vh;
         box-sizing: border-box;
         -webkit-font-smoothing: antialiased;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
       }
 
       #viz { display: none; }
@@ -93,7 +126,9 @@
 
       /* ───── Window frame (Leopard rounded card on the desktop) ───── */
       .window {
-        height: 100%;
+        /* fills the viewport (minus body padding) when content is short, and
+           grows past it when content is tall so the page scrolls. */
+        min-height: calc(100vh - 48px);
         max-width: 1400px;
         margin: 0 auto;
         display: flex;
@@ -133,11 +168,11 @@
         flex: 0 0 auto;
         position: relative;
         height: 22px;
-        font-size: 13px;
+        font-size: 15px;
       }
       #title-bar h1 {
         margin: 0;
-        font-size: 13px;
+        font-size: 15px;
         font-weight: 600;
         letter-spacing: 0;
         color: var(--tb-text);
@@ -246,14 +281,226 @@
           inset 0  1px 0 rgba(255,255,255,0.55),
           inset 0 -1px 0 rgba(0,0,0,0.18);
         flex: 0 0 auto;
-        font-size: 11px;
+        font-size: 13px;
         color: var(--ink);
       }
       .toolbar .tag {
         color: var(--ink-dim);
         margin-left: auto;
-        font-size: 11px;
+        font-size: 13px;
       }
+      .toolbar .theme-field {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--ink-dim);
+        font-size: 13px;
+        font-weight: 500;
+      }
+      .toolbar .theme-field select {
+        padding: 2px 24px 2px 8px;
+        font-size: 13px;
+        border-radius: 10px;
+      }
+
+      /* WEBDJ wordmark — Mona Sans (variable: weight 900 / width 125) */
+      .toolbar .logo {
+        font-family: 'Mona Sans', -apple-system, system-ui, sans-serif;
+        font-size: 16px;
+        line-height: 1;
+        font-variation-settings: 'wght' 900, 'wdth' 125;
+        color: #fff;
+        letter-spacing: 0;
+        text-transform: none;
+        margin-right: 6px;
+      }
+
+      /* ───── Themes ─────
+         "Snow Leopard" is the current/default look — every rule above defines it.
+         "Realistic" = Serum-style dark synth UI, scoped under body.theme-realistic. */
+      body.theme-realistic {
+        --sr-bg-0: #0c0e11;
+        --sr-panel-1: #21262d;
+        --sr-panel-2: #1a1e24;
+        --sr-panel-edge: #3a424c;
+        --sr-text: #d7dde4;
+        --sr-text-dim: #8b949f;
+        --sr-accent: #36a7e6;        /* Serum azure */
+        --sr-accent-2: #5fd0ef;      /* brighter cyan highlight */
+        --sr-accent-glow: rgba(54,167,230,0.55);
+        --sr-orange: #f0922b;
+
+        background:
+          radial-gradient(120% 90% at 50% -10%, #20252c 0%, #0c0e11 60%, #07080a 100%);
+        color: var(--sr-text);
+        padding: 0;   /* full-bleed: window fills the viewport */
+      }
+
+      /* Window = full-screen flat chassis (no floating-window frame) */
+      body.theme-realistic .window {
+        background: linear-gradient(180deg, #1a1e24 0%, #131619 100%);
+        max-width: none;
+        margin: 0;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        min-height: 100vh;   /* full-bleed: no body padding in this theme */
+      }
+
+      /* Hide the macOS-style title bar + traffic lights entirely (flat full-screen app) */
+      body.theme-realistic #title-bar { display: none; }
+      body.theme-realistic #title-bar h1 {
+        color: var(--sr-accent-2);
+        text-shadow: 0 0 10px var(--sr-accent-glow);
+        letter-spacing: 0.16em;
+        font-weight: 700;
+      }
+
+      body.theme-realistic .toolbar {
+        background: #161a1f;
+        border-bottom: 1px solid #000;
+        color: var(--sr-text-dim);
+        box-shadow: none;
+      }
+      body.theme-realistic .toolbar .tag,
+      body.theme-realistic .toolbar .theme-field { color: var(--sr-text-dim); }
+      /* Logo far left; Learn/Reset/Theme grouped after it; the hint is
+         right-aligned via the base .toolbar .tag { margin-left: auto } rule. */
+      /* Theme dropdown matches the Learn / Reset buttons */
+      body.theme-realistic .toolbar .theme-field select {
+        padding: 4px 24px 4px 14px;
+        font-size: 14px;
+        border-radius: 4px;
+      }
+
+      body.theme-realistic .window-body {
+        background: #16181d;   /* dark grey shows through the gaps */
+        gap: 8px;
+        padding: 8px;
+      }
+      body.theme-realistic .row { gap: 8px; }
+
+      /* Hide the Spotify setup banner */
+      body.theme-realistic #setup-note { display: none; }
+
+      /* Panels — flat dark modules, rounded, separated by dark 8px gaps */
+      body.theme-realistic .panel {
+        background: linear-gradient(180deg, var(--sr-panel-1) 0%, var(--sr-panel-2) 100%);
+        border: 0;
+        border-radius: 8px;
+        box-shadow: none;
+      }
+      body.theme-realistic .panel-title {
+        /* Dark fill, a touch lighter than the panel body, with light text */
+        background: linear-gradient(180deg, #2c333d 0%, #262d36 100%);
+        color: var(--sr-text);
+        border-bottom: 1px solid rgba(0,0,0,0.45);
+        text-shadow: none;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
+      }
+      body.theme-realistic .panel-body { color: var(--sr-text); }
+      body.theme-realistic label { color: var(--sr-text-dim); }
+
+      /* Buttons + selects — matte dark with subtle bevel (.wc traffic lights + .switch toggle excluded) */
+      body.theme-realistic button:not(.wc):not(.switch),
+      body.theme-realistic select {
+        background: linear-gradient(180deg, #2c323a 0%, #20252b 50%, #1a1e23 100%);
+        color: var(--sr-text);
+        border: 1px solid #444c55;
+        border-radius: 4px;
+        text-shadow: 0 1px 0 rgba(0,0,0,0.5);
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.07),
+          inset 0 -1px 0 rgba(0,0,0,0.4),
+          0 1px 2px rgba(0,0,0,0.5);
+      }
+      body.theme-realistic button:not(.wc):hover { filter: brightness(1.18); }
+      body.theme-realistic button:not(.wc):not(.switch):active,
+      body.theme-realistic button.pressed:not(.switch) {
+        background: linear-gradient(180deg, var(--sr-accent) 0%, #1c6fa8 100%);
+        color: #fff;
+        border-color: #0a4a78;
+        box-shadow:
+          inset 0 2px 4px rgba(0,0,0,0.5),
+          0 0 10px var(--sr-accent-glow);
+      }
+      body.theme-realistic button:not(.wc):disabled {
+        background: linear-gradient(180deg, #20242a 0%, #181b20 100%);
+        color: #555c64;
+        border-color: #2c3239;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+        opacity: 1;
+      }
+      body.theme-realistic select option { background: #1a1e23; color: var(--sr-text); }
+      body.theme-realistic #learn-btn.active {
+        background: linear-gradient(180deg, var(--sr-accent-2) 0%, var(--sr-accent) 55%, #1c6fa8 100%);
+        color: #06131c;
+        border-color: #0a4a78;
+        text-shadow: 0 1px 0 rgba(255,255,255,0.25);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.3), 0 0 12px var(--sr-accent-glow);
+      }
+
+      /* Pills + pads now use the theme-independent pan-knob.html control kit
+         (rect purple-glow FX buttons / teal drum pads), so the old realistic
+         overrides for those backgrounds have been removed. */
+
+      /* Key hints now render as engraved bracketed text in the label style
+         (see .key below), so the keycap-chip theme override is gone. */
+
+      /* Sliders — thin dark track + glowing metallic-blue thumb */
+      body.theme-realistic input[type=range]::-webkit-slider-runnable-track {
+        background: linear-gradient(180deg, #0c0e11 0%, #181c21 100%);
+        border: 1px solid #000;
+        box-shadow: inset 0 1px 2px rgba(0,0,0,0.8);
+      }
+      body.theme-realistic input[type=range]::-webkit-slider-thumb {
+        background:
+          radial-gradient(circle at 35% 30%,
+            #cdeeff 0%, var(--sr-accent-2) 35%, var(--sr-accent) 65%, #0e4f7e 100%);
+        border: 1px solid #0a3a60;
+        box-shadow:
+          inset 0 1px 0 rgba(255,255,255,0.5),
+          0 0 8px var(--sr-accent-glow),
+          0 1px 2px rgba(0,0,0,0.6);
+      }
+
+      /* Pads use the theme-independent pan-knob.html drum-pad styling (see the
+         Sampler pads section); the old realistic .pad overrides are removed. */
+
+      /* LCD screen — 2px black outline, dark shadow above + light shadow below */
+      body.theme-realistic .lcd-area {
+        border: 2px solid #000;
+        border-radius: 8px;
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.18),
+          inset 0 -1px 0 rgba(0,0,0,0.6),
+          0 -1px 1px rgba(0,0,0,0.2),        /* dark shadow above */
+          0  1px 1px rgba(255,255,255,0.2);  /* light shadow below */
+      }
+
+      /* Tape screen — same 2px black outline + dark-above/light-below shadows */
+      body.theme-realistic .tape-screen {
+        border: 2px solid #000;
+        border-radius: 8px;
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.18),
+          inset 0 -1px 0 rgba(0,0,0,0.6),
+          0 -1px 1px rgba(0,0,0,0.2),        /* dark shadow above */
+          0  1px 1px rgba(255,255,255,0.2);  /* light shadow below */
+      }
+
+      /* Setup note → dark info strip */
+      body.theme-realistic #setup-note {
+        background: linear-gradient(180deg, #1f2731 0%, #161c24 100%);
+        border: 1px solid #2e3a46;
+        color: #aeb8c4;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+      }
+      body.theme-realistic #setup-note strong { color: #e6ecf2; }
+      body.theme-realistic #setup-note em,
+      body.theme-realistic #setup-note a { color: var(--sr-accent-2); }
 
       /* ───── Window body (brushed aluminum) ───── */
       .window-body {
@@ -262,8 +509,7 @@
         flex-direction: column;
         gap: 8px;
         padding: 10px;
-        min-height: 0;
-        overflow: hidden;
+        overflow: visible;
         background:
           repeating-linear-gradient(0deg,
             rgba(0,0,0,0.020) 0 1px,
@@ -296,7 +542,7 @@
         background: linear-gradient(180deg, var(--sh-1) 0%, var(--sh-2) 100%);
         color: var(--sh-text);
         padding: 4px 10px;
-        font-size: 11px;
+        font-size: 13px;
         font-weight: 600;
         letter-spacing: 0.02em;
         text-shadow: 0 1px 0 rgba(255,255,255,0.7);
@@ -310,10 +556,32 @@
       .row {
         display: flex;
         gap: 8px;
-        flex: 1 1 0;
-        min-height: 0;
+        flex: 0 0 auto;          /* wrap to content height */
         align-items: stretch;
       }
+
+      /* Bottom section: 3-column grid so the Sampler can span two rows tall.
+         Filling order is Gate, Loop, [Sampler spans col 3], Mangle, EQ kill. */
+      .row-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        grid-template-rows: repeat(2, 1fr);
+        gap: 8px;
+        flex: 0 0 auto;          /* wrap to content height */
+      }
+      .row-grid .sampler-panel { grid-column: 3; grid-row: 1 / span 2; }
+
+      /* Filter / Sends — lay the controls out in a single horizontal row
+         (pill + knobs + select) instead of stacking them vertically. */
+      .panel-body.fx-row {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+      }
+      .panel-body.fx-row > div { margin: 0; }
+      .panel-body.fx-row label { margin: 0; }
 
       /* ───── Aqua "default" blue buttons (all of them) ───── */
       select, button {
@@ -330,20 +598,20 @@
         border-radius: 12px;
         padding: 4px 14px;
         font-family: inherit;
-        font-size: 12px;
+        font-size: 14px;
         font-weight: 500;
         letter-spacing: 0;
         text-shadow: 0 1px 0 rgba(255,255,255,0.55);
         box-shadow:
           inset 0  1px 0 rgba(255,255,255,0.65),
           inset 0 -1px 0 rgba(0,0,0,0.25),
-          0 0 8px var(--aq-glow),
+          0 0 8px var(--btn-glow, var(--aq-glow)),
           0 1px 1px rgba(0,0,0,0.3);
         cursor: pointer;
         position: relative;
       }
       button:hover { filter: brightness(1.06); }
-      button:active, button.pressed {
+      button:not(.switch):active, button:not(.switch).pressed {
         background:
           var(--gloss),
           linear-gradient(180deg,
@@ -373,9 +641,16 @@
       select {
         padding-right: 26px;
       }
+      select, button, select option { text-transform: uppercase; }
       select option { background: #fff; color: var(--ink); }
 
-      label { display: block; margin: 5px 0; color: var(--ink-dim); font-weight: 500; font-size: 11px; }
+      /* No drop shadow on standard button label text (both themes, all states).
+         The realistic-scoped duplicate is needed to out-order the realistic
+         button rule, which sets its own text-shadow at higher specificity. */
+      button:not(.wc):not(.switch),
+      body.theme-realistic button:not(.wc):not(.switch) { text-shadow: none; }
+
+      label { display: block; margin: 5px 0; color: var(--ink-dim); font-weight: 500; font-size: 13px; }
 
       /* ───── Sliders ───── */
       input[type=range] {
@@ -414,57 +689,281 @@
           0 1px 2px rgba(0,0,0,0.4);
       }
 
-      /* ───── Pills (Aqua chips) ───── */
-      .pill {
-        display: inline-block;
-        position: relative;
-        background:
-          var(--gloss),
-          linear-gradient(180deg,
-            #f4faff 0%,
-            #b8d8f4 18%,
-            #5a98dc 52%,
-            #2c70b8 68%,
-            #5a9cd8 100%);
-        color: var(--ink);
-        font-family: inherit;
-        font-size: 11px;
+      /* Pill-list panels (Gate/Loop/EQ kill/Mangle) — wrap buttons into rows */
+      .panel-body.list-body {
+        display: flex;
+        flex-wrap: wrap;
+        align-content: flex-start;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      .panel-body.list-body > div { margin: 0; }
+      .panel-body.list-body .pill { margin: 0; }
+
+      /* Loop panel — 3×2 grid of loop-length buttons with the pitch dial on the
+         right. (The dial is a knobified <input type=range>, see ui/knob.ts.) */
+      .panel-body.loop-body {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 14px;
+      }
+      .loop-grid {
+        flex: 1 1 auto;            /* fill the panel width up to the dial */
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        grid-auto-rows: 1fr;
+        gap: 6px;
+      }
+      .loop-grid > div { display: flex; }
+      .loop-grid .pill { margin: 0; flex: 1 1 auto; }
+      .panel-body.loop-body label.loop-pitch { margin: 0; flex: 0 0 auto; }
+
+      /* Gate panel — uniform 3-column grid; the buttons wrap into rows at their
+         natural size, nothing spans across columns. */
+      .panel-body.gate-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+        align-content: start;
+      }
+      .panel-body.gate-grid .pill {
+        margin: 0;
+        min-width: 0;
+        width: 100%;
+      }
+
+      /* ───── Rotary knobs (replace range sliders) ───── */
+      label.has-knob {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        width: auto;
+        margin: 6px 14px 4px 0;
+        vertical-align: top;
+        color: var(--ink-dim);
+        font-size: 12px;
         font-weight: 600;
-        padding: 3px 11px;
-        margin: 3px 2px 3px 0;
-        border: 1px solid var(--aq-4);
-        border-radius: 11px;
         letter-spacing: 0.02em;
-        text-shadow: 0 1px 0 rgba(255,255,255,0.55);
+      }
+      label.has-knob > input[type=range] { display: none; }
+      .player-controls .player-slider.has-knob { flex: 0 0 auto; min-width: 0; max-width: none; }
+      body.theme-realistic label.has-knob { color: var(--sr-text-dim); }
+      .knob-cap { text-transform: uppercase; opacity: 0.85; white-space: nowrap; }
+
+      /* Dials are the pan-knob.html knob, scaled by --s (0.5× of the 1× source). */
+      .knob-stage {
+        position: relative;
+        width: calc(130px * var(--s));
+        height: calc(130px * var(--s));
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        touch-action: none;
+      }
+      .knob-stage .ticks { position: absolute; inset: 0; }
+      .knob-stage .tick {
+        position: absolute;
+        top: 50%; left: 50%;
+        width: calc(2px * var(--s)); height: calc(6px * var(--s));
+        margin-left: calc(-1px * var(--s)); margin-top: calc(-3px * var(--s));
+        background: rgba(255,255,255,0.3);
+        border-radius: calc(1px * var(--s));
+        transform-origin: 50% 0;
+      }
+      .knob-stage .top-notch {
+        position: absolute;
+        top: calc(2px * var(--s)); left: 50%;
+        transform: translateX(-50%);
+        width: 0; height: 0;
+        border-left: calc(4px * var(--s)) solid transparent;
+        border-right: calc(4px * var(--s)) solid transparent;
+        border-top: calc(6px * var(--s)) solid rgba(0,0,0,0.55);
+      }
+      .knob {
+        position: relative;
+        width: calc(96px * var(--s)); height: calc(96px * var(--s));
+        border-radius: 50%;
+        border: calc(2px * var(--s)) solid #0d0e10;
+        cursor: grab;
+        touch-action: none;
+        background:
+          radial-gradient(circle at 50% 50%,
+            hsl(216, 8%, 13%) 0%,
+            hsl(220, 9%, 16%) 58%,
+            hsl(210, 17%, 0%) 100%);
         box-shadow:
-          inset 0  1px 0 rgba(255,255,255,0.65),
-          inset 0 -1px 0 rgba(0,0,0,0.25),
-          0 0 6px var(--aq-glow),
-          0 1px 1px rgba(0,0,0,0.3);
+          0 calc(1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.5),
+          0 calc(3px * var(--s)) calc(4px * var(--s)) rgba(0,0,0,0.45),
+          0 calc(8px * var(--s)) calc(12px * var(--s)) rgba(0,0,0,0.38),
+          0 calc(16px * var(--s)) calc(28px * var(--s)) rgba(0,0,0,0.3),
+          0 calc(28px * var(--s)) calc(48px * var(--s)) rgba(0,0,0,0.22),
+          0 calc(-1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.5),
+          0 calc(1px * var(--s)) calc(1px * var(--s)) rgba(255,255,255,0.5);
+      }
+      .knob::before {
+        content: "";
+        position: absolute;
+        inset: calc(15px * var(--s));
+        border-radius: 50%;
+        background: linear-gradient(180deg, #585c63 0%, #34373c 100%);
+      }
+      .knob .inner-ring,
+      .knob .inner-ring-sharp {
+        position: absolute; inset: calc(15px * var(--s));
+        pointer-events: none; overflow: visible;
+      }
+      .knob .inner-ring { filter: blur(calc(1px * var(--s))); }
+      .knob .inner-ring-sharp { filter: blur(calc(0.3px * var(--s))); }
+      .knob .inner-ring circle,
+      .knob .inner-ring-sharp circle { fill: none; vector-effect: non-scaling-stroke; }
+      .knob .inner-ring circle { stroke: rgba(255,255,255,0.2); stroke-width: calc(3 * var(--s)); }
+      .knob .inner-ring-sharp circle { stroke: rgba(255,255,255,0.125); stroke-width: calc(2 * var(--s)); }
+      .indicator-orbit {
+        position: absolute; inset: 0;
+        pointer-events: none;
+        transform: rotate(var(--rotation, 0deg));
+        z-index: 2;
+      }
+      .indicator {
+        position: absolute;
+        top: calc(14px * var(--s)); left: 50%;
+        transform: translateX(-50%);
+        width: calc(6px * var(--s)); height: calc(21px * var(--s));
+        border-radius: calc(2px * var(--s));
+        --grad-angle: 180deg;
+        background: linear-gradient(var(--grad-angle), #f2efe8 0%, #c9c4ba 100%);
+        /* offsets are written by knob.ts, already scaled by --s */
+        --sh1-x: 0px; --sh1-y: calc(1px * var(--s));
+        --sh2-x: 0px; --sh2-y: calc(2px * var(--s));
+        --ins-top-x: 0px; --ins-top-y: calc(1px * var(--s));
+        --ins-bot-x: 0px; --ins-bot-y: calc(-1px * var(--s));
+        box-shadow:
+          var(--sh1-x) var(--sh1-y) 0 rgba(0,0,0,0.7),
+          var(--sh2-x) var(--sh2-y) calc(2px * var(--s)) rgba(0,0,0,0.45),
+          inset var(--ins-top-x) var(--ins-top-y) calc(1px * var(--s)) rgba(255,255,255,0.9),
+          inset var(--ins-bot-x) var(--ins-bot-y) calc(1px * var(--s)) rgba(0,0,0,0.15);
+      }
+
+      /* ───── FX buttons — pan-knob.html rect pad with purple glow, 0.5× (--s) ─────
+         Resting = subdued/always-lit purple; .on / .pressed / :active = full
+         colour + stronger glow (the pad-rect:active state). */
+      .pill {
+        --s: var(--sb);               /* FX buttons render at the button/pad scale */
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: calc(8px * var(--s));
+        position: relative;
+        isolation: isolate;           /* so the bevel ::before can sit behind the label */
+        box-sizing: border-box;
+        min-width: calc(104px * var(--s));
+        min-height: calc(56px * var(--s));
+        padding: 0 calc(20px * var(--s));
+        margin: calc(6px * var(--s)) calc(6px * var(--s)) calc(6px * var(--s)) 0;
+        border: calc(2px * var(--s)) solid #0d0e10;
+        border-radius: calc(8px * var(--s));
+        font-family: inherit;
+        font-size: calc(12px * var(--s) + 2px);   /* match pan-knob.html .pad-text */
+        font-weight: 400;
+        letter-spacing: calc(1px * var(--s));
+        color: #e7ddff;
+        text-shadow:
+          0 calc(-1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.45),
+          0 calc(1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.55);
+        background:
+          radial-gradient(circle at 50% 55%,
+            #564c70 0%,
+            #403961 24%,
+            #2c2745 55%,
+            #1c182e 80%,
+            #14111f 100%);
+        box-shadow:
+          0 calc(1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.5),
+          0 calc(3px * var(--s)) calc(4px * var(--s)) rgba(0,0,0,0.4),
+          0 calc(8px * var(--s)) calc(12px * var(--s)) rgba(0,0,0,0.32),
+          0 calc(16px * var(--s)) calc(24px * var(--s)) rgba(0,0,0,0.22),
+          0 calc(-1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.5),
+          0 calc(1px * var(--s)) calc(1px * var(--s)) rgba(255,255,255,0.35),
+          calc(-1px * var(--s)) 0 calc(1px * var(--s)) rgba(0,0,0,0.5),
+          calc(1px * var(--s)) 0 calc(1px * var(--s)) rgba(255,255,255,0.35),
+          0 0 calc(4px * var(--s)) rgba(150,120,235,0.015),
+          inset 0 0 calc(14px * var(--s)) rgba(0,0,0,0.62);
+        /* Only fade the face; let the box-shadow (and its outer glow) snap
+           instantly like the pads — animating the 4px→30px glow blur reads
+           as a slow bloom, so we keep it off the transition list. */
+        transition: background 100ms ease-out;
         user-select: none;
         overflow: hidden;
       }
-      .pill.on {
-        filter: saturate(1.25) brightness(1.06);
+      /* soft inner bevel frame (combines pan-knob's two inset-border layers) */
+      .pill::before {
+        content: "";
+        position: absolute;
+        inset: calc(2px * var(--s));
+        border-radius: calc(5px * var(--s));
+        pointer-events: none;
+        z-index: -1;
+        filter: blur(calc(var(--edge-falloff) * var(--s)));
+        transition: opacity 100ms ease-out;
         box-shadow:
-          inset 0  1px 0 rgba(255,255,255,0.7),
-          inset 0 -1px 0 rgba(0,0,0,0.25),
-          0 0 14px rgba(110,180,250,0.95),
-          0 0 22px rgba(110,180,250,0.55),
-          0 1px 1px rgba(0,0,0,0.3);
+          inset calc(var(--edge-size) * var(--s)) 0 calc(2px * var(--s)) calc(var(--edge-spread) * var(--s)) rgba(255,255,255,var(--white-alpha)),
+          inset calc(-1 * var(--edge-size) * var(--s)) 0 calc(2px * var(--s)) calc(var(--edge-spread) * var(--s)) rgba(255,255,255,var(--white-alpha)),
+          inset 0 calc(var(--edge-size) * var(--s)) calc(2px * var(--s)) calc(var(--edge-spread) * var(--s)) rgba(0,0,0,var(--black-alpha)),
+          inset 0 calc(-1 * var(--edge-size) * var(--s)) calc(2px * var(--s)) calc(var(--edge-spread) * var(--s)) rgba(0,0,0,var(--black-alpha));
+      }
+      /* Lit face — fade back the white/black bevel overlay so the glow dominates */
+      .pill.on::before,
+      .pill.pressed::before,
+      .pill:active::before,
+      .pill.recording::before,
+      .pill.learning::before,
+      #rec-pill.armed::before {
+        opacity: 0.4;
+      }
+      /* Engraved labels — pan-knob.html .pad-text: off-white on the resting
+         (subdued) face with a black top + white bottom shadow, flipping to a
+         semi-transparent black when the face lights up on press (see the .on /
+         :active flip below). Wrapped in JS (see ui/labels.ts). */
+      .pill .ctl-label,
+      .pad .ctl-label {
+        color: #e9e5db;                 /* off-white when not pressed */
+        transition: color 100ms ease-out;
+        text-shadow:
+          0 calc(-1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.22),
+          0 calc(1px * var(--s)) calc(1px * var(--s)) rgba(255,255,255,0.2);
+      }
+      .pill.on,
+      .pill.pressed,
+      .pill:active,
+      .pill.recording,
+      .pill.learning,
+      #rec-pill.armed {
+        color: #fff;
+        background: var(--pill-face,
+          radial-gradient(circle at 50% 55%,
+            #ddd0f7 0%,
+            #b199e8 20%,
+            #6a55c0 52%,
+            #342b66 80%,
+            #16122a 100%));
+        box-shadow:
+          0 calc(1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.55),
+          0 calc(2px * var(--s)) calc(3px * var(--s)) rgba(0,0,0,0.4),
+          0 calc(4px * var(--s)) calc(6px * var(--s)) rgba(0,0,0,0.28),
+          0 calc(8px * var(--s)) calc(14px * var(--s)) rgba(0,0,0,0.18),
+          0 calc(-1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.6),
+          0 calc(1px * var(--s)) calc(1px * var(--s)) rgba(255,255,255,0.22),
+          calc(-1px * var(--s)) 0 calc(1px * var(--s)) rgba(0,0,0,0.55),
+          calc(1px * var(--s)) 0 calc(1px * var(--s)) rgba(255,255,255,0.3),
+          0 0 calc(30px * var(--s)) var(--pill-glow, rgba(165,130,255,0.75)),
+          inset 0 0 calc(18px * var(--s)) var(--pill-inner, rgba(0,0,0,0.7));
       }
       .pill.recording {
-        background:
-          var(--gloss),
-          linear-gradient(180deg, #ff9c9c 0%, #ff5c5c 25%, #d02828 60%, #8c0c0c 100%);
-        color: #fff;
-        border-color: #4a0000;
-        text-shadow: 0 -1px 0 rgba(0,0,0,0.4);
-        box-shadow:
-          inset 0  1px 0 rgba(255,255,255,0.55),
-          inset 0 -1px 0 rgba(0,0,0,0.25),
-          0 0 10px rgba(255,80,80,0.6),
-          0 1px 1px rgba(0,0,0,0.3);
+        --pill-face: var(--rec-bloom);
+        --pill-glow: var(--rec-glow);
+        --pill-inner: var(--rec-inner);
         animation: rec-pulse 0.45s ease-in-out infinite;
       }
       @keyframes rec-pulse {
@@ -472,17 +971,9 @@
         50% { opacity: 0.65; }
       }
       .pill.learning {
-        background:
-          var(--gloss),
-          linear-gradient(180deg, #e4b8f8 0%, #b070d8 35%, #6020a0 70%, #2a0840 100%) !important;
-        color: #fff !important;
-        border-color: #200840 !important;
-        text-shadow: 0 -1px 0 rgba(0,0,0,0.35) !important;
-        box-shadow:
-          inset 0  1px 0 rgba(255,255,255,0.55),
-          inset 0 -1px 0 rgba(0,0,0,0.25),
-          0 0 12px rgba(180,90,240,0.55),
-          0 1px 1px rgba(0,0,0,0.3) !important;
+        --pill-face: var(--rec-bloom);
+        --pill-glow: var(--rec-glow);
+        --pill-inner: var(--rec-inner);
         animation: learn-pulse 0.7s ease-in-out infinite;
       }
       @keyframes learn-pulse {
@@ -492,64 +983,67 @@
       body.learn-mode .pill { cursor: pointer; }
       body.learn-mode .pill:hover { filter: brightness(1.05); }
 
-      .pill.pressed::after,
-      .pad.pressed::after {
-        content: '';
-        position: absolute;
-        inset: 0;
-        border-radius: inherit;
-        background: linear-gradient(180deg,
-          rgba(0,0,0,0.35) 0%,
-          rgba(0,0,0,0.15) 50%,
-          rgba(255,255,255,0.15) 100%);
-        box-shadow:
-          inset 0  2px 3px rgba(0,0,0,0.45),
-          inset 0 -1px 0 rgba(255,255,255,0.25);
-        pointer-events: none;
-        z-index: 1;
-      }
-      .pill.pressed,
-      .pad.pressed {
-        transform: translateY(1px);
-        filter: brightness(0.92);
-      }
+      /* Press feedback for FX buttons + drum pads now comes from the gradient +
+         glow swap on .pressed / .on / .playing (pan-knob's :active state), so the
+         old darkening overlay is gone. */
 
+      /* Key hint — a small 1:1 rounded-square keycap chip framed by a 1px
+         border. The border uses currentColor so it flips dark with the text on
+         a lit face (see the color flip below). The glyph is a fixed size (1px
+         smaller than the button .ctl-label, and the SAME on pads so pad key
+         hints match the buttons rather than scaling up with the larger pad
+         label) and the whole chip is faded back 30% so it reads as a secondary
+         hint. letter-spacing is zeroed so the single glyph centers exactly. The
+         bare key char lives in textContent (updated on rebind); color +
+         text-shadow inherit onto it. */
       .key {
-        background: linear-gradient(180deg, #f8f8f8 0%, #d0d0d0 50%, #bababa 100%);
-        color: var(--ink);
-        padding: 0 5px;
-        margin-left: 5px;
-        border-radius: 3px;
-        font-family: inherit;
-        font-size: 10px;
-        font-weight: 600;
-        text-shadow: 0 1px 0 rgba(255,255,255,0.7);
-        border: 1px solid #888;
-        box-shadow:
-          inset 0  1px 0 rgba(255,255,255,0.9),
-          0 1px 0 rgba(255,255,255,0.4);
-        letter-spacing: 0;
-        color: #2a2a2a;
-      }
-      .pad.locked .key, .pad.recording .key, .pill.recording .key, .pill.learning .key, #rec-pill.armed .key {
-        background: linear-gradient(180deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.3) 100%);
-        color: #fff;
-        border-color: rgba(0,0,0,0.4);
-        text-shadow: 0 -1px 0 rgba(0,0,0,0.3);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        box-sizing: border-box;
+        width: 1.6em;                   /* equal width/height → perfect square */
+        height: 1.6em;
+        padding: 0;
+        border: calc(1px * var(--s)) solid currentColor;
+        border-radius: calc(4px * var(--s));
+        font-size: calc(12px * var(--s) + 1px);  /* 1px under the button label; same on pads */
+        line-height: 1;
+        letter-spacing: 0;              /* center the single glyph (pill adds trailing spacing) */
+        color: #e9e5db;
+        opacity: 0.7;                   /* faded back 30% */
+        transition: color 120ms ease-out;
+        text-shadow:
+          0 calc(-1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.22),
+          0 calc(1px * var(--s)) calc(1px * var(--s)) rgba(255,255,255,0.2);
       }
 
+      /* Lit/pressed face → engraved text flips to transparent black, matching
+         pan-knob.html .pad-rect:active .pad-text. */
+      .pill.on .ctl-label,        .pill.on .key,
+      .pill.pressed .ctl-label,   .pill.pressed .key,
+      .pill:active .ctl-label,    .pill:active .key,
+      .pill.recording .ctl-label, .pill.recording .key,
+      .pill.learning .ctl-label,  .pill.learning .key,
+      #rec-pill.armed .ctl-label, #rec-pill.armed .key,
+      .pad:active .ctl-label,     .pad:active .key,
+      .pad.pressed .ctl-label,    .pad.pressed .key,
+      .pad.playing .ctl-label,    .pad.playing .key,
+      .pad.recording .ctl-label,  .pad.recording .key {
+        color: rgba(0,0,0,0.5);
+      }
+
+      /* MIDI map active = the same glossy button, recolored fully red. */
       #learn-btn.active {
+        --btn-glow: var(--rec-glow);
         background:
           var(--gloss),
-          linear-gradient(180deg, #e4b8f8 0%, #b070d8 35%, #6020a0 70%, #2a0840 100%);
-        color: #fff;
-        border-color: #200840;
-        text-shadow: 0 0 6px #d488f8aa, 0 -1px 0 rgba(0,0,0,0.4);
-        box-shadow:
-          inset 0  1px 0 rgba(255,255,255,0.5),
-          inset 0 -1px 0 rgba(0,0,0,0.25),
-          0 0 10px rgba(180,90,240,0.5),
-          0 1px 1px rgba(0,0,0,0.3);
+          linear-gradient(180deg,
+            #fff0f0 0%,
+            #ffc6c6 18%,
+            #ef6a6a 52%,
+            #c83030 68%,
+            #e85e5e 100%);
+        border-color: #7a1414;
       }
 
       /* ───── Setup note (Mail-style amber info banner) ───── */
@@ -559,7 +1053,7 @@
         border: 1px solid #c08a18;
         padding: 6px 12px;
         color: #4a3208;
-        font-size: 11px;
+        font-size: 13px;
         line-height: 1.45;
         box-shadow:
           inset 0  1px 0 rgba(255,255,255,0.7),
@@ -587,104 +1081,314 @@
         box-shadow: 0 0 6px rgba(106,168,248,0.6);
       }
 
-      /* ───── Sampler pads ───── */
+      /* ───── Sampler drum pads — pan-knob.html square pad, 0.5× (--s) ─────
+         Resting = dark glassy face; trigger (:active / .pressed / .playing) =
+         teal/green bloom + glow (the pad:active state). */
+      /* HOLD / ONE-SHOT toggle — ported from pan-knob.html's BASS BOOST switch.
+         Renders at the button/pad scale (--sb), alongside the sampler controls. */
+      .toggle-row {
+        --s: var(--sb);
+        display: inline-flex;
+        align-items: center;
+        gap: calc(10px * var(--s));
+      }
+      .toggle-side {
+        font-size: calc(13px * var(--s) + 2px);
+        font-weight: 700;
+        letter-spacing: calc(0.5px * var(--s));
+        transition: color 130ms ease-out;
+        user-select: none;
+      }
+      /* default = HOLD (off side lit); .on lights the one-shot side */
+      .toggle-row .toggle-off { color: #b9bdc2; }
+      .toggle-row .toggle-on  { color: #6b6f74; }
+      .toggle-row.on .toggle-off { color: #6b6f74; }
+      .toggle-row.on .toggle-on  { color: #b9bdc2; }
+
+      .switch {
+        position: relative;
+        flex: none;
+        box-sizing: border-box;
+        width: calc(46px * var(--s));
+        height: calc(26px * var(--s));
+        padding: 0;
+        border-radius: calc(13px * var(--s));
+        border: calc(1px * var(--s)) solid #07090b;
+        cursor: pointer;
+        -webkit-appearance: none;
+        appearance: none;
+        background: linear-gradient(180deg, #0c0f12 0%, #16191d 100%);
+        box-shadow:
+          inset 0 calc(2px * var(--s)) calc(3px * var(--s)) rgba(0,0,0,0.7),
+          inset 0 calc(-1px * var(--s)) 0 rgba(255,255,255,0.05);
+      }
+      .switch-knob {
+        position: absolute;
+        top: calc(1px * var(--s));
+        left: calc(2px * var(--s));
+        width: calc(20px * var(--s));
+        height: calc(20px * var(--s));
+        border-radius: 50%;
+        /* chrome: high-contrast spun-metal conic (milled rings drawn as SVG strokes on top) */
+        background: conic-gradient(
+          hsl(0deg, 0%, 44%),
+          hsl(0deg, 0%, 93%),
+          hsl(0deg, 0%, 98%),
+          hsl(0deg, 0%, 30%),
+          hsl(0deg, 0%, 56%),
+          hsl(0deg, 0%, 99%),
+          hsl(0deg, 0%, 100%),
+          hsl(0deg, 0%, 52%),
+          hsl(0deg, 0%, 38%)
+        );
+        border: calc(1px * var(--s)) solid #2a2d31;
+        box-shadow:
+          0 calc(0.5px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.5),
+          0 calc(1.5px * var(--s)) calc(3px * var(--s)) rgba(0,0,0,0.45),
+          0 calc(3px * var(--s)) calc(6px * var(--s)) rgba(0,0,0,0.38),
+          0 calc(6px * var(--s)) calc(11px * var(--s)) rgba(0,0,0,0.3),
+          0 calc(9px * var(--s)) calc(17px * var(--s)) rgba(0,0,0,0.22),
+          0 calc(13px * var(--s)) calc(24px * var(--s)) rgba(0,0,0,0.15),
+          inset 0 calc(1px * var(--s)) calc(1px * var(--s)) rgba(255,255,255,0.5),
+          inset 0 calc(-1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.25);
+        transition: transform 130ms ease-out;
+      }
+      .toggle-row.on .switch-knob {
+        transform: translateX(calc(20px * var(--s)));
+      }
+      /* milled metal: concentric rings drawn as real SVG circles (smooth strokes) */
+      .mill {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        pointer-events: none;
+        filter: blur(calc(0.4px * var(--s)));
+      }
+      .mill circle { fill: none; stroke-width: 0.5; }
+      .mill circle:nth-child(odd)  { stroke: rgba(0,0,0,0.16); }
+      .mill circle:nth-child(even) { stroke: rgba(255,255,255,0.14); }
+
       .sampler-grid {
+        --s: var(--sb);               /* grid sizing at the button/pad scale */
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 6px;
+        grid-template-columns: repeat(4, calc(120px * var(--s)));
+        gap: calc(12px * var(--s));
+        justify-content: start;
       }
       .pad {
+        --s: var(--sb);               /* drum pads render at the button/pad scale */
         position: relative;
+        isolation: isolate;           /* bevel ::before sits behind the label */
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 4px;
-        padding: 18px 6px;
-        font-size: 13px;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-        color: var(--ink);
+        gap: calc(8px * var(--s));
+        font-size: calc(26px * var(--s) + 2px);
+        font-weight: 700;
+        letter-spacing: calc(1px * var(--s));
+        color: #d8efe7;
+        border: calc(2px * var(--s)) solid #0d0e10;
+        border-radius: calc(10px * var(--s));
+        text-shadow:
+          0 calc(-1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.5),
+          0 calc(1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.6);
         background:
-          var(--gloss),
-          linear-gradient(180deg,
-            #f4faff 0%,
-            #b8d8f4 18%,
-            #5a98dc 52%,
-            #2c70b8 68%,
-            #5a9cd8 100%);
-        border: 1px solid var(--aq-4);
-        border-radius: 6px;
-        text-shadow: 0 1px 0 rgba(255,255,255,0.55);
+          radial-gradient(circle at 50% 55%,
+            #1a2624 0%,
+            #131c1b 60%,
+            #0a1110 100%);
         box-shadow:
-          inset 0  1px 0 rgba(255,255,255,0.65),
-          inset 0 -1px 0 rgba(0,0,0,0.25),
-          0 0 8px var(--aq-glow),
-          0 1px 2px rgba(0,0,0,0.4);
+          0 calc(1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.38),
+          0 calc(3px * var(--s)) calc(4px * var(--s)) rgba(0,0,0,0.33),
+          0 calc(8px * var(--s)) calc(12px * var(--s)) rgba(0,0,0,0.27),
+          0 calc(16px * var(--s)) calc(28px * var(--s)) rgba(0,0,0,0.21),
+          0 calc(-1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.5),
+          0 calc(1px * var(--s)) calc(1px * var(--s)) rgba(255,255,255,0.5),
+          calc(-1px * var(--s)) 0 calc(1px * var(--s)) rgba(0,0,0,0.5),
+          calc(1px * var(--s)) 0 calc(1px * var(--s)) rgba(255,255,255,0.5),
+          inset 0 0 calc(12px * var(--s)) rgba(0,0,0,0.55);
+        transition: box-shadow 160ms ease-out, background 160ms ease-out;
         user-select: none;
         cursor: pointer;
       }
-      .pad.has-sample { filter: saturate(1.15) brightness(1.04); }
+      /* soft inner bevel frame (combines pan-knob's two inset-border layers) */
+      .pad::before {
+        content: "";
+        position: absolute;
+        inset: calc(2px * var(--s));
+        border-radius: calc(6px * var(--s));
+        pointer-events: none;
+        z-index: -1;
+        filter: blur(calc(var(--edge-falloff) * var(--s)));
+        box-shadow:
+          inset calc(var(--edge-size) * var(--s)) 0 calc(2px * var(--s)) calc(var(--edge-spread) * var(--s)) rgba(255,255,255,var(--white-alpha)),
+          inset calc(-1 * var(--edge-size) * var(--s)) 0 calc(2px * var(--s)) calc(var(--edge-spread) * var(--s)) rgba(255,255,255,var(--white-alpha)),
+          inset 0 calc(var(--edge-size) * var(--s)) calc(2px * var(--s)) calc(var(--edge-spread) * var(--s)) rgba(0,0,0,var(--black-alpha)),
+          inset 0 calc(-1 * var(--edge-size) * var(--s)) calc(2px * var(--s)) calc(var(--edge-spread) * var(--s)) rgba(0,0,0,var(--black-alpha));
+      }
+      /* the 8 sampler pads are fixed-size squares */
+      .sampler-grid .pad {
+        width: calc(120px * var(--s));
+        height: calc(120px * var(--s));
+        padding: 0;
+      }
+      .pad.has-sample { filter: saturate(1.15) brightness(1.08); }
       .pad.locked {
         background:
-          var(--gloss),
-          linear-gradient(180deg, #ffd086 0%, #ff9a3c 32%, #c46410 65%, #6a3408 100%);
+          radial-gradient(circle at 50% 55%,
+            #ffb968 0%,
+            #d97f24 32%,
+            #8a4a10 65%,
+            #2a1606 100%);
         color: #fff;
-        border-color: #5a2c00;
-        text-shadow: 0 -1px 0 rgba(0,0,0,0.4);
+        border-color: #2a1606;
+        text-shadow: 0 calc(-1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.5);
         box-shadow:
-          inset 0  1px 0 rgba(255,255,255,0.5),
-          inset 0 -1px 0 rgba(0,0,0,0.3),
-          0 0 10px rgba(255,140,40,0.4),
-          0 1px 2px rgba(0,0,0,0.4);
+          0 calc(1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.5),
+          0 calc(3px * var(--s)) calc(4px * var(--s)) rgba(0,0,0,0.4),
+          0 calc(8px * var(--s)) calc(12px * var(--s)) rgba(0,0,0,0.32),
+          0 0 calc(12px * var(--s)) rgba(255,150,50,0.35),
+          inset 0 0 calc(14px * var(--s)) rgba(0,0,0,0.5);
       }
-      .pad.playing { animation: pad-flash 250ms ease-out; }
-      @keyframes pad-flash {
-        0%   { box-shadow: 0 0 18px var(--aq-glow), 0 0 32px var(--aq-glow), inset 0 1px 0 rgba(255,255,255,0.7); }
-        100% { }
+      /* trigger bloom — the pan-knob pad:active state */
+      .pad:active,
+      .pad.pressed,
+      .pad.playing,
+      .pad.recording {
+        background: var(--pad-face,
+          radial-gradient(circle at 50% 55%,
+            #b6e6da 0%,
+            #6fb5a3 22%,
+            #2e5a52 55%,
+            #1a2a28 80%,
+            #0d1716 100%));
+        box-shadow:
+          0 calc(1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.55),
+          0 calc(2px * var(--s)) calc(3px * var(--s)) rgba(0,0,0,0.4),
+          0 calc(4px * var(--s)) calc(6px * var(--s)) rgba(0,0,0,0.28),
+          0 calc(8px * var(--s)) calc(14px * var(--s)) rgba(0,0,0,0.18),
+          0 calc(-1px * var(--s)) calc(1px * var(--s)) rgba(0,0,0,0.6),
+          0 calc(1px * var(--s)) calc(1px * var(--s)) rgba(255,255,255,0.18),
+          calc(-1px * var(--s)) 0 calc(1px * var(--s)) rgba(0,0,0,0.55),
+          calc(1px * var(--s)) 0 calc(1px * var(--s)) rgba(255,255,255,0.25),
+          0 0 calc(24px * var(--s)) var(--pad-glow, rgba(140,220,200,0.55)),
+          inset 0 0 calc(18px * var(--s)) var(--pad-inner, rgba(0,0,0,0.75));
       }
       .pad.recording {
-        background:
-          var(--gloss),
-          linear-gradient(180deg, #ff9c9c 0%, #ff5c5c 25%, #d02828 60%, #8c0c0c 100%);
-        color: #fff;
-        border-color: #4a0000;
+        --pad-face: var(--rec-bloom);
+        --pad-glow: var(--rec-glow);
+        --pad-inner: var(--rec-inner);
         animation: rec-pulse 0.45s ease-in-out infinite;
-        box-shadow:
-          inset 0  1px 0 rgba(255,255,255,0.55),
-          inset 0 -1px 0 rgba(0,0,0,0.25),
-          0 0 12px rgba(255,80,80,0.6),
-          0 1px 2px rgba(0,0,0,0.4);
       }
       #rec-pill.armed {
-        background:
-          var(--gloss),
-          linear-gradient(180deg, #ff9c9c 0%, #ff5c5c 25%, #d02828 60%, #8c0c0c 100%);
-        color: #fff;
-        border-color: #4a0000;
-        text-shadow: 0 -1px 0 rgba(0,0,0,0.4);
-        box-shadow:
-          inset 0  1px 0 rgba(255,255,255,0.55),
-          inset 0 -1px 0 rgba(0,0,0,0.25),
-          0 0 10px rgba(255,80,80,0.6),
-          0 1px 1px rgba(0,0,0,0.3);
+        --pill-face: var(--rec-bloom);
+        --pill-glow: var(--rec-glow);
+        --pill-inner: var(--rec-inner);
         animation: rec-pulse 0.45s ease-in-out infinite;
       }
       #mode-pill { cursor: pointer; }
 
       /* ───── Player panel (glossy black LCD strip) ───── */
-      #player-panel { flex: 0 0 auto; overflow: visible; }
+      /* Player grows to fill leftover viewport height; floored at its content
+         (current) height so it never shrinks below it. */
+      #player-panel { flex: 1 0 auto; overflow: visible; }
       .player-body {
-        padding: 8px 10px;
+        padding: 10px 10px 8px;
         display: flex;
         flex-direction: column;
         gap: 8px;
       }
+      /* The screens panel is just a frame for the LCD + tape plates — strip the
+         card fill (background/border/shadow) and body padding so the screens sit
+         flush on the chassis. ID beats both the default + realistic .panel rules. */
+      #player-panel {
+        background: none;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        overflow: visible;
+      }
+      /* keep a little bottom room so the screens' drop shadow isn't clipped */
+      #player-panel .panel-body { padding: 0 0 4px; }
+
+      /* The two screens sit side by side: the BPM LCD flexes, the OP-1 tape
+         screen is a fixed-aspect plate to its right. Both share the bezel. */
+      .screens-row {
+        display: flex;
+        align-items: stretch;
+        gap: 8px;
+        flex: 1 1 auto;        /* grow to fill the player panel's vertical space */
+        min-height: 132px;     /* …but never collapse below the readable floor */
+      }
       .lcd-area {
-        /* glossy black panel like iTunes album-art LCD, with a subtle dot grid */
+        flex: 1 1 auto;
+        min-width: 0;
+        position: relative; /* anchors the ::after scanline overlay */
+        /* glossy black panel like iTunes album-art LCD, with a subtle dot grid.
+           Scanlines come from the ::after overlay (matching the tape screen) —
+           no faint-blue scanline layer here, so the two screens read the same. */
         background:
           /* dotted grid */
           radial-gradient(circle, rgba(140,200,255,0.13) 0.9px, transparent 1.3px) 0 0 / 10px 10px,
-          /* faint scanlines */
+          linear-gradient(180deg,
+            #2a2a2c 0%,
+            #131316 45%,
+            #050507 100%);
+        border: 1px solid #000;
+        border-radius: 6px;
+        padding: 10px 16px;
+        /* Quadrant layout: BPM/BAR top-left, tempo lights top-right,
+           volume indicator bottom-left, spectrum bottom-right. */
+        display: grid;
+        grid-template-columns: auto 1fr;
+        grid-template-rows: auto auto;
+        grid-template-areas:
+          "info leds"
+          "vol  viz";
+        align-content: space-between;
+        column-gap: 18px;
+        row-gap: 8px;
+        box-shadow:
+          inset 0  1px 0 rgba(255,255,255,0.18),
+          inset 0 -1px 0 rgba(0,0,0,0.6),
+          0 1px 0 rgba(255,255,255,0.55),
+          0 1px 3px rgba(0,0,0,0.45);
+      }
+      /* top-left: BPM + BAR readouts side by side */
+      .lcd-info {
+        grid-area: info;
+        display: flex;
+        align-items: stretch;
+        gap: 18px;
+      }
+      /* CRT scanlines drawn over the glass — same 2px-on/2px-off cadence as the
+         tape screen's drawScanlines(), but a touch darker so they read with the
+         same weight here (the lighter panel + glowing text wash 0.08 out). */
+      .lcd-area::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        pointer-events: none;
+        background: repeating-linear-gradient(0deg,
+          rgba(0,0,0,0.3) 0 2px,
+          transparent 2px 4px);
+      }
+      /* OP-1 tape screen — same glossy recessed plate as the BPM LCD; the
+         canvas repaints the matching gradient + bevel on top of it. */
+      .tape-screen {
+        position: relative;    /* anchor the absolutely-positioned canvas */
+        flex: 0 0 auto;
+        /* Fixed-aspect plate: height comes from the stretched row; op1-tape.ts'
+           resize() sets the width to height × 280/132 in JS. We deliberately do
+           NOT use CSS aspect-ratio here — combined with the JS-set width it forms
+           a width<->height loop (every size is a fixed point) that drifts huge. */
+        width: auto;
+        align-self: stretch;
+        background:
+          radial-gradient(circle, rgba(140,200,255,0.13) 0.9px, transparent 1.3px) 0 0 / 10px 10px,
           repeating-linear-gradient(0deg,
             rgba(140,200,255,0.035) 0 1px,
             transparent 1px 3px),
@@ -694,41 +1398,45 @@
             #050507 100%);
         border: 1px solid #000;
         border-radius: 6px;
-        padding: 10px 14px;
-        display: flex;
-        align-items: center;
-        gap: 18px;
+        overflow: hidden;
         box-shadow:
           inset 0  1px 0 rgba(255,255,255,0.18),
           inset 0 -1px 0 rgba(0,0,0,0.6),
           0 1px 0 rgba(255,255,255,0.55),
           0 1px 3px rgba(0,0,0,0.45);
       }
-      /* Status row that sits BELOW the screen — auto / tap / meter live here now. */
-      .player-status {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 0 2px;
+      .tape-screen canvas { display: block; position: absolute; inset: 0; width: 100%; height: 100%; }
+      /* Level meter — a thin strip along the bottom edge of the BPM screen. */
+      /* bottom-left: volume indicator */
+      .lcd-area .lcd-mini-meter {
+        grid-area: vol;
+        align-self: end;
+        justify-self: stretch;
+        width: auto;
+        height: 6px;
+        margin: 0;
       }
-      .player-status .lcd-mini-meter { margin-left: 0; flex: 1; max-width: 260px; }
-      .lcd-stack { display: flex; flex-direction: column; gap: 2px; }
+      .lcd-stack { display: flex; flex-direction: column; gap: 2px; justify-content: space-between; }
       .lcd-label {
         color: #8ac4f8;
         font-family: inherit;
-        font-size: 9px;
+        font-size: 11px;
         font-weight: bold;
         letter-spacing: 0.22em;
         text-transform: uppercase;
         text-shadow: 0 0 4px rgba(106,168,248,0.5);
       }
+      .lcd-label.amber {
+        color: #ffc878;
+        text-shadow: 0 0 4px rgba(255,200,120,0.5);
+      }
       .lcd {
         background: transparent;
         color: #6aa8f8;
-        font-family: 'Lucida Grande', ui-monospace, monospace;
+        font-family: 'Special Gothic Condensed One', ui-monospace, monospace;
         padding: 0;
         border: 0;
-        font-size: 15px;
+        font-size: 17px;
         font-weight: bold;
         text-shadow: 0 0 8px rgba(106,168,248,0.85), 0 0 2px rgba(106,168,248,1);
         min-width: 56px;
@@ -737,19 +1445,21 @@
       }
       .lcd.amber { color: #ffc878; text-shadow: 0 0 8px rgba(255,200,120,0.85), 0 0 2px rgba(255,200,120,1); }
       .lcd-area .lcd-large {
-        font-size: 32px;
+        font-size: 34px;
         font-weight: bold;
         line-height: 1;
         letter-spacing: 0.06em;
       }
-      .lcd-area .lcd-medium { font-size: 17px; line-height: 1; }
+      .lcd-area .lcd-medium { font-size: 19px; line-height: 1; }
 
-      /* Beat LEDs */
+      /* Beat LEDs — top-right (tempo lights) */
       .beat-leds {
+        grid-area: leds;
+        justify-self: end;
+        align-self: start;
         display: flex;
         align-items: center;
         gap: 14px;
-        margin-left: auto;
         padding: 2px 4px;
       }
       /* Glowy rounded rectangles drawn ON the LCD plate (no recessed socket). */
@@ -767,7 +1477,6 @@
       .beat-led.lit {
         background: linear-gradient(180deg, #cfeaff 0%, #6aa8f8 45%, #2c70b8 100%);
         box-shadow:
-          inset 0  1px 1px rgba(255,255,255,0.55),
           0 0  10px rgba(106,168,248,0.85),
           0 0  26px rgba(106,168,248,0.55),
           0 0  60px rgba(106,168,248,0.30);
@@ -776,21 +1485,22 @@
       .beat-led.lit-1 {
         background: linear-gradient(180deg, #ffe2b0 0%, #ffa850 45%, #b05818 100%);
         box-shadow:
-          inset 0  1px 1px rgba(255,255,255,0.55),
           0 0  10px rgba(255,170,80,0.85),
           0 0  26px rgba(255,170,80,0.55),
           0 0  60px rgba(255,170,80,0.28);
         transition: none;
       }
 
-      /* Spectrum visualizer on the screen. */
+      /* Spectrum visualizer — bottom-right quadrant */
       .lcd-viz {
-        flex: 1;
+        grid-area: viz;
+        align-self: end;
+        justify-self: end;
+        width: 100%;
         height: 40px;
         min-width: 80px;
         max-width: 280px;
         display: block;
-        align-self: center;
       }
 
       .lcd-mini-meter {
@@ -811,27 +1521,31 @@
         box-shadow: 0 0 6px rgba(106,168,248,0.6);
       }
 
+      /* Control strip stacked to the LEFT of the BPM screen. */
       .player-controls {
         display: flex;
-        align-items: center;
+        flex-direction: column;
+        align-items: stretch;
+        justify-content: flex-start;     /* both buttons stack at top; dial pushed to bottom via margin-top:auto */
         gap: 8px;
-        flex-wrap: wrap;
+        flex: 0 0 auto;
+        width: 150px;
+        padding: 24px;
       }
+      .player-controls button { width: 100%; }
       .player-controls .player-slider {
         display: flex; align-items: center; gap: 8px;
         margin: 0;
-        flex: 1;
-        min-width: 200px;
-        max-width: 420px;
         color: var(--ink-dim);
         font-weight: 500;
-        font-size: 11px;
+        font-size: 13px;
       }
       .player-controls .player-slider input { flex: 1; }
-      .player-controls select { max-width: 240px; }
+      /* Master dial centres in the column + sits at the bottom (margin-top:auto). */
+      .player-controls .player-slider.has-knob { align-self: center; margin: auto 0 0; }
     </style>
   </head>
-  <body>
+  <body class="theme-realistic">
     <div class="window">
       <div id="title-bar">
         <div class="window-controls">
@@ -839,12 +1553,19 @@
           <button class="wc wc-min" title="Minimize"></button>
           <button class="wc wc-max" title="Zoom"></button>
         </div>
-        <h1>DJ-AMP</h1>
+        <h1>WEBDJ</h1>
       </div>
 
       <div class="toolbar">
+        <span class="logo">WEBDJ</span>
         <button id="learn-btn">Learn</button>
         <button id="reset-bindings-btn">Reset map</button>
+        <span class="theme-field">Theme
+          <select id="theme-select">
+            <option value="realistic">REALISTIC</option>
+            <option value="snow-leopard">SNOW LEOPARD</option>
+          </select>
+        </span>
         <span class="tag">Click Learn, click a pad, press a key/MIDI button.</span>
       </div>
 
@@ -853,41 +1574,39 @@
         <div id="setup-note">
           <strong>Setup:</strong> Open <a href="https://open.spotify.com" target="_blank">Spotify Web Player</a> in another tab,
           start a track, click <em>Capture tab</em> below, choose <strong>Chrome Tab</strong> → Spotify tab → tick <strong>Share tab audio</strong>.
-          <br><span style="opacity:0.7;font-size:11px;">Alternative: BlackHole + Multi-Output Device, then pick from the device dropdown.</span>
         </div>
 
         <div class="panel" id="player-panel">
-          <div class="panel-title">Player</div>
           <div class="panel-body player-body">
-            <div class="lcd-area">
-              <div class="lcd-stack">
-                <div class="lcd-label">BPM</div>
-                <span class="lcd lcd-large" id="bpm-display">---.-</span>
+            <div class="screens-row">
+              <div class="player-controls">
+                <button id="tab-btn" class="btn-accent">Capture tab</button>
+                <button id="reset-btn">Reset BPM</button>
+                <label class="player-slider">Master <input type="range" id="master-vol" min="0" max="1.5" step="0.01" value="1"></label>
               </div>
-              <div class="lcd-stack">
-                <div class="lcd-label">BAR</div>
-                <span class="lcd lcd-medium amber" id="bar-display">- / -</span>
+              <div class="lcd-area">
+                <div class="lcd-info">
+                  <div class="lcd-stack">
+                    <div class="lcd-label">BPM</div>
+                    <span class="lcd lcd-large" id="bpm-display">---.-</span>
+                  </div>
+                  <div class="lcd-stack">
+                    <div class="lcd-label amber">BAR</div>
+                    <span class="lcd lcd-medium amber" id="bar-display">- / -</span>
+                  </div>
+                </div>
+                <canvas id="lcd-viz" class="lcd-viz"></canvas>
+                <div class="beat-leds" id="beat-leds">
+                  <div class="beat-led" data-beat="0"></div>
+                  <div class="beat-led" data-beat="1"></div>
+                  <div class="beat-led" data-beat="2"></div>
+                  <div class="beat-led" data-beat="3"></div>
+                </div>
+                <div class="lcd-mini-meter"><div class="meter-fill" id="meter"></div></div>
               </div>
-              <canvas id="lcd-viz" class="lcd-viz"></canvas>
-              <div class="beat-leds" id="beat-leds">
-                <div class="beat-led" data-beat="0"></div>
-                <div class="beat-led" data-beat="1"></div>
-                <div class="beat-led" data-beat="2"></div>
-                <div class="beat-led" data-beat="3"></div>
+              <div class="tape-screen">
+                <canvas id="tape-canvas"></canvas>
               </div>
-            </div>
-            <div class="player-status">
-              <span class="pill" id="bpm-conf">auto</span>
-              <span class="pill" id="tap-pill">Tap <span class="key">␣</span></span>
-              <div class="lcd-mini-meter"><div class="meter-fill" id="meter"></div></div>
-            </div>
-            <div class="player-controls">
-              <button id="tab-btn" class="btn-accent">Capture tab</button>
-              <select id="device-select"></select>
-              <button id="start-btn">Use device</button>
-              <button id="stop-btn" disabled>Stop</button>
-              <button id="reset-btn">Reset BPM</button>
-              <label class="player-slider">Master <input type="range" id="master-vol" min="0" max="1.5" step="0.01" value="1"></label>
             </div>
           </div>
         </div>
@@ -895,89 +1614,88 @@
         <div class="row">
           <div class="panel">
             <div class="panel-title">Filter</div>
-            <div class="panel-body">
-              <div style="margin-bottom:6px;"><span class="pill" id="filter-sweep-pill">Sweep <span class="key">F</span></span></div>
+            <div class="panel-body fx-row">
+              <div><span class="pill" id="filter-sweep-pill">Sweep <span class="key">F</span></span></div>
               <label>Cutoff <input type="range" id="filter-cutoff" min="80" max="20000" step="1" value="20000"></label>
               <label>Q <input type="range" id="filter-q" min="0.5" max="20" step="0.1" value="1"></label>
-              <label>Type
-                <select id="filter-type">
-                  <option value="lowpass">low-pass</option>
-                  <option value="highpass">high-pass</option>
-                  <option value="bandpass">band-pass</option>
+              <div class="toggle-row" id="filter-type-toggle" title="Toggle low-pass / high-pass filter">
+                <span class="toggle-side toggle-off">LP</span>
+                <button class="switch" aria-label="Toggle low-pass / high-pass filter"><span class="switch-knob"><svg class="mill" viewBox="0 0 20 20" preserveAspectRatio="xMidYMid meet"><circle cx="10" cy="10" r="9"/><circle cx="10" cy="10" r="8.4"/><circle cx="10" cy="10" r="7.8"/><circle cx="10" cy="10" r="7.2"/><circle cx="10" cy="10" r="6.6"/><circle cx="10" cy="10" r="6"/><circle cx="10" cy="10" r="5.4"/><circle cx="10" cy="10" r="4.8"/><circle cx="10" cy="10" r="4.2"/><circle cx="10" cy="10" r="3.6"/><circle cx="10" cy="10" r="3"/><circle cx="10" cy="10" r="2.4"/><circle cx="10" cy="10" r="1.8"/><circle cx="10" cy="10" r="1.2"/></svg></span></button>
+                <span class="toggle-side toggle-on">HP</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title">Delay</div>
+            <div class="panel-body fx-row">
+              <div>
+                <span class="pill" id="delay-throw-pill">Throw <span class="key">T</span></span>
+              </div>
+              <label>Send <input type="range" id="delay-send" min="0" max="1" step="0.01" value="0"></label>
+              <label>Sync
+                <select id="delay-div">
+                  <option value="2">1/2</option>
+                  <option value="1.5">1/4 DOTTED</option>
+                  <option value="1">1/4</option>
+                  <option value="0.75" selected>1/8 DOTTED</option>
+                  <option value="0.5">1/8</option>
+                  <option value="0.33333333">1/8 TRIPLET</option>
+                  <option value="0.25">1/16</option>
                 </select>
               </label>
             </div>
           </div>
 
           <div class="panel">
-            <div class="panel-title">Sends</div>
-            <div class="panel-body">
-              <div style="margin-bottom:4px;">
-                <span class="pill" id="delay-throw-pill">Delay throw <span class="key">T</span></span>
+            <div class="panel-title">Reverb</div>
+            <div class="panel-body fx-row">
+              <div>
+                <span class="pill" id="reverb-throw-pill">Throw <span class="key">R</span></span>
               </div>
-              <div style="margin-bottom:4px;">
-                <span class="pill" id="reverb-throw-pill">Reverb throw <span class="key">R</span></span>
-              </div>
-              <label>Delay <input type="range" id="delay-send" min="0" max="1" step="0.01" value="0"></label>
-              <label>Reverb <input type="range" id="reverb-send" min="0" max="1" step="0.01" value="0"></label>
+              <label>Send <input type="range" id="reverb-send" min="0" max="1" step="0.01" value="0"></label>
             </div>
           </div>
         </div>
 
-        <div class="row">
+        <div class="row-grid">
           <div class="panel">
-            <div class="panel-title">Gate (hold)</div>
-            <div class="panel-body">
-              <div><span class="pill" id="gate-kill">Kill <span class="key">G</span></span></div>
-              <div><span class="pill" id="gate-1-4">1/4 <span class="key">1</span></span></div>
-              <div><span class="pill" id="gate-1-8">1/8 <span class="key">2</span></span></div>
-              <div><span class="pill" id="gate-1-16">1/16 <span class="key">3</span></span></div>
-              <div><span class="pill" id="gate-1-32">1/32 <span class="key">4</span></span></div>
-              <div><span class="pill" id="gate-1-64">1/64 <span class="key">5</span></span></div>
-              <div><span class="pill" id="gate-1-128">1/128 <span class="key">6</span></span></div>
+            <div class="panel-title">Gate</div>
+            <div class="panel-body gate-grid">
+              <span class="pill" id="gate-kill">Kill <span class="key">G</span></span>
+              <span class="pill" id="gate-1-8">1/8 <span class="key">2</span></span>
+              <span class="pill" id="gate-1-16">1/16 <span class="key">3</span></span>
+              <span class="pill" id="gate-1-32">1/32 <span class="key">4</span></span>
+              <span class="pill" id="gate-1-64">1/64 <span class="key">5</span></span>
+              <span class="pill" id="gate-1-128">1/128 <span class="key">6</span></span>
             </div>
           </div>
 
           <div class="panel">
-            <div class="panel-title">Loop (hold)</div>
-            <div class="panel-body">
-              <div><span class="pill" id="loop-bar1">1 bar <span class="key">Q</span></span></div>
-              <div><span class="pill" id="loop-beat2">2 beat <span class="key">W</span></span></div>
-              <div><span class="pill" id="loop-beat1">1 beat <span class="key">A</span></span></div>
-              <div><span class="pill" id="loop-beat-half">1/2 beat <span class="key">S</span></span></div>
-              <div><span class="pill" id="loop-beat-quarter">1/4 beat <span class="key">D</span></span></div>
-              <div><span class="pill" id="loop-beat-eighth">1/8 beat <span class="key">E</span></span></div>
+            <div class="panel-title">Loop</div>
+            <div class="panel-body loop-body">
+              <div class="loop-grid">
+                <div><span class="pill" id="loop-bar1">1 bar <span class="key">Q</span></span></div>
+                <div><span class="pill" id="loop-beat2">2 beat <span class="key">W</span></span></div>
+                <div><span class="pill" id="loop-beat1">1 beat <span class="key">A</span></span></div>
+                <div><span class="pill" id="loop-beat-half">1/2 beat <span class="key">S</span></span></div>
+                <div><span class="pill" id="loop-beat-quarter">1/4 beat <span class="key">D</span></span></div>
+                <div><span class="pill" id="loop-beat-eighth">1/8 beat <span class="key">E</span></span></div>
+              </div>
+              <label class="loop-pitch">Loop pitch <input type="range" id="loop-pitch" min="0.25" max="2" step="0.01" value="1"></label>
             </div>
           </div>
 
-          <div class="panel">
-            <div class="panel-title">EQ kill (hold)</div>
-            <div class="panel-body">
-              <div><span class="pill" id="hp-kill-pill">Low kill <span class="key">L</span></span></div>
-              <div><span class="pill" id="lp-kill-pill">High kill <span class="key">H</span></span></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="row">
-          <div class="panel">
-            <div class="panel-title">Mangle (hold)</div>
-            <div class="panel-body">
-              <div><span class="pill" id="bitcrush-5">Crush 5b <span class="key">B</span></span></div>
-              <div><span class="pill" id="bitcrush-3">Crush 3b <span class="key">N</span></span></div>
-              <div><span class="pill" id="reverse-pill">Reverse <span class="key">V</span></span></div>
-              <div><span class="pill" id="freeze-pill">Freeze <span class="key">C</span></span></div>
-              <div><span class="pill" id="tape-stop-pill">Tape stop <span class="key">Z</span></span></div>
-              <label style="margin-top:8px;">Loop pitch <input type="range" id="loop-pitch" min="0.25" max="2" step="0.01" value="1"></label>
-            </div>
-          </div>
-
-          <div class="panel">
+          <div class="panel sampler-panel">
             <div class="panel-title">Sampler</div>
             <div class="panel-body">
               <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
                 <span class="pill" id="rec-pill">REC <span class="key">`</span></span>
-                <span class="pill" id="mode-pill" title="Click to toggle one-shot / hold">HOLD</span>
+                <div class="toggle-row" id="mode-toggle" style="margin-left:auto;" title="Toggle hold / one-shot playback">
+                  <span class="toggle-side toggle-off">HOLD</span>
+                  <button class="switch" aria-label="Toggle hold / one-shot playback"><span class="switch-knob"><svg class="mill" viewBox="0 0 20 20" preserveAspectRatio="xMidYMid meet"><circle cx="10" cy="10" r="9"/><circle cx="10" cy="10" r="8.4"/><circle cx="10" cy="10" r="7.8"/><circle cx="10" cy="10" r="7.2"/><circle cx="10" cy="10" r="6.6"/><circle cx="10" cy="10" r="6"/><circle cx="10" cy="10" r="5.4"/><circle cx="10" cy="10" r="4.8"/><circle cx="10" cy="10" r="4.2"/><circle cx="10" cy="10" r="3.6"/><circle cx="10" cy="10" r="3"/><circle cx="10" cy="10" r="2.4"/><circle cx="10" cy="10" r="1.8"/><circle cx="10" cy="10" r="1.2"/></svg></span></button>
+                  <span class="toggle-side toggle-on">1-SHOT</span>
+                </div>
               </div>
               <div class="sampler-grid">
                 <span class="pad" id="pad-0" data-pad="0">1 <span class="key">7</span></span>
@@ -993,13 +1711,20 @@
           </div>
 
           <div class="panel">
-            <div class="panel-title">MIDI</div>
-            <div class="panel-body">
-              <div id="midi-status" style="color:#5a5a5a;">not connected</div>
-              <div style="margin-top:6px; color:#7a7a7a; font-size:11px;">
-                Last message:
-              </div>
-              <div id="midi-last" style="margin-top:2px; font-size:11px; color:#2c70b8; font-family:'Lucida Grande', monospace;"></div>
+            <div class="panel-title">Mangle</div>
+            <div class="panel-body list-body">
+              <div><span class="pill" id="bitcrush-5">Crush 5b <span class="key">B</span></span></div>
+              <div><span class="pill" id="bitcrush-4">Crush 4b <span class="key">N</span></span></div>
+              <div><span class="pill" id="reverse-pill">Reverse <span class="key">V</span></span></div>
+              <div><span class="pill" id="tape-stop-pill">Tape stop <span class="key">Z</span></span></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-title">EQ kill</div>
+            <div class="panel-body list-body">
+              <div><span class="pill" id="hp-kill-pill">Low kill <span class="key">L</span></span></div>
+              <div><span class="pill" id="lp-kill-pill">High kill <span class="key">H</span></span></div>
             </div>
           </div>
         </div>

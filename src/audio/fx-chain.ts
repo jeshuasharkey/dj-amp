@@ -16,7 +16,7 @@ export interface FxChain {
 // Light → destroyed. Same parallel-crossfade design as the gate: only one wet
 // path is non-zero at a time, all others stay at 0, so the sum-into-output is
 // effectively a single-stage selector.
-export const BITCRUSH_BITS = [5, 3] as const;
+export const BITCRUSH_BITS = [5, 4] as const;
 
 export function buildFxChain(ctx: AudioContext): FxChain {
   const nyquist = Math.floor(ctx.sampleRate / 2) - 1;
@@ -41,8 +41,11 @@ export function buildFxChain(ctx: AudioContext): FxChain {
   const dryGain = ctx.createGain();
   dryGain.gain.value = 1;
 
-  // Echo: delay → feedback → back into delay; tap to mix via delaySend
-  const delay = ctx.createDelay(2.0);
+  // Echo: delay → feedback → back into delay; tap to mix via delaySend.
+  // delayTime is beat-synced from main.ts (note-division × beat duration); the
+  // 0.375 here is just the pre-sync fallback (a dotted-1/8 at 120 BPM). Max is
+  // generous (3s) to cover long divisions at slow tempos, e.g. 1/2 note @ 60 BPM.
+  const delay = ctx.createDelay(3.0);
   delay.delayTime.value = 0.375;
   const delayFeedback = ctx.createGain();
   delayFeedback.gain.value = 0.4;

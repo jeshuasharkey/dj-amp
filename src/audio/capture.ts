@@ -1,25 +1,3 @@
-export async function requestMicPermission(): Promise<void> {
-  // Triggers the permission prompt so enumerateDevices returns labels.
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  stream.getTracks().forEach(t => t.stop());
-}
-
-export async function listInputDevices(): Promise<MediaDeviceInfo[]> {
-  const devices = await navigator.mediaDevices.enumerateDevices();
-  return devices.filter(d => d.kind === 'audioinput');
-}
-
-export async function captureFromDevice(deviceId: string): Promise<MediaStream> {
-  return navigator.mediaDevices.getUserMedia({
-    audio: {
-      deviceId: { exact: deviceId },
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false,
-    },
-  });
-}
-
 // Tab-audio capture via the screen-share picker. The user picks the Spotify
 // (or whatever) tab; we discard the video track and use the audio one.
 // Chrome requires video:true for the tab option to appear in the picker.

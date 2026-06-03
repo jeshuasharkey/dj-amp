@@ -1,4 +1,4 @@
-import { requestMicPermission, listInputDevices, captureFromDevice, captureTabAudio } from './audio/capture';
+import { captureTabAudio } from './audio/capture';
 import { buildFxChain } from './audio/fx-chain';
 import { BeatTracker } from './audio/beat';
 import { Looper } from './audio/looper';
@@ -6,21 +6,19 @@ import { MasterGate } from './audio/gate';
 import { Sampler, PAD_COUNT } from './audio/sampler';
 import { setupMidi, type MidiEvent } from './input/midi';
 import { BindingManager } from './input/bindings';
+import { knobifyAll, setKnobVisual } from './ui/knob';
+import { styleControlLabels } from './ui/labels';
+import { Op1Tape } from './ui/op1-tape';
 
 // ──────────────────────────────────────────────────────────────────────
 // Element refs
 // ──────────────────────────────────────────────────────────────────────
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
-const deviceSelect = $<HTMLSelectElement>('device-select');
-const startBtn = $<HTMLButtonElement>('start-btn');
 const tabBtn = $<HTMLButtonElement>('tab-btn');
-const stopBtn = $<HTMLButtonElement>('stop-btn');
 const meter = $('meter');
 const bpmDisplay = $('bpm-display');
-const bpmConf = $('bpm-conf');
 const barDisplay = $('bar-display');
-const tapPill = $('tap-pill');
 const filterSweepPill = $('filter-sweep-pill');
 const delayThrowPill = $('delay-throw-pill');
 const reverbThrowPill = $('reverb-throw-pill');
@@ -28,31 +26,31 @@ const hpKillPill = $('hp-kill-pill');
 const lpKillPill = $('lp-kill-pill');
 const bitcrushPills: Record<string, HTMLElement> = {
   '5': $('bitcrush-5'),
-  '3': $('bitcrush-3'),
+  '4': $('bitcrush-4'),
 };
 const reversePill = $('reverse-pill');
-const freezePill = $('freeze-pill');
 const tapeStopPill = $('tape-stop-pill');
 const loopPitch = $<HTMLInputElement>('loop-pitch');
 const beatLEDs = Array.from(document.querySelectorAll<HTMLElement>('#beat-leds .beat-led'));
 const lcdViz = $<HTMLCanvasElement>('lcd-viz');
 const lcdVizCtx = lcdViz.getContext('2d');
+const tapeCanvas = $<HTMLCanvasElement>('tape-canvas');
 const padElements: HTMLElement[] = [];
 for (let i = 0; i < PAD_COUNT; i++) padElements.push($(`pad-${i}`));
 const recPill = $('rec-pill');
-const modePill = $('mode-pill');
+const modeToggle = $('mode-toggle');
 const resetBtn = $<HTMLButtonElement>('reset-btn');
 const learnBtn = $<HTMLButtonElement>('learn-btn');
 const resetBindingsBtn = $<HTMLButtonElement>('reset-bindings-btn');
 const filterCutoff = $<HTMLInputElement>('filter-cutoff');
 const filterQ = $<HTMLInputElement>('filter-q');
-const filterType = $<HTMLSelectElement>('filter-type');
+const filterTypeToggle = $('filter-type-toggle');
 const delaySend = $<HTMLInputElement>('delay-send');
+const delayDiv = $<HTMLSelectElement>('delay-div');
 const reverbSend = $<HTMLInputElement>('reverb-send');
 const masterVol = $<HTMLInputElement>('master-vol');
 const gatePills: Record<string, HTMLElement> = {
   kill: $('gate-kill'),
-  '1.0': $('gate-1-4'),
   '0.5': $('gate-1-8'),
   '0.25': $('gate-1-16'),
   '0.125': $('gate-1-32'),
@@ -67,8 +65,6 @@ const LOOP_PILLS: Record<number, HTMLElement> = {
   0.25: $('loop-beat-quarter'),
   0.125: $('loop-beat-eighth'),
 };
-const midiStatus = $('midi-status');
-const midiLast = $('midi-last');
 
 // ──────────────────────────────────────────────────────────────────────
 // State
@@ -83,65 +79,46 @@ let masterGate: MasterGate | null = null;
 // liveGain sits on the live FX path only (not the loop playback path), so we can
 // duck the live signal while loops are playing — otherwise you hear loop + live underneath.
 let liveGain: GainNode | null = null;
+// Sits on the live path right after liveGain. At rest its delay is 0 (transparent);
+// tape stop grows the delay so the live signal pitches down in real time, then
+// shrinks it back to 0 to resync to live. This is the "look-ahead" buffer.
+let tapeStopDelay: DelayNode | null = null;
 let meterAnalyser: AnalyserNode | null = null;
 let meterData: Uint8Array<ArrayBuffer> | null = null;
 let lastBeatIndex = -1;
 let sampler: Sampler | null = null;
 let recordModeActive = false;
 let oneShotMode = false; // false = hold-to-loop
+let highPassMode = false; // false = low-pass filter
 let running = false;
 
 // Only one loop is active at a time (recording or playing). Pressing a second
 // loop key replaces the first; releasing the current key stops everything.
 let currentLoop: number | null = null;
 // Mangle effects use the same single playback slot as loops, so pressing
-// reverse/freeze cancels any active loop and vice versa.
+// reverse cancels any active loop and vice versa.
 let reverseActive = false;
-let freezeActive = false;
 let tapeStopActive = false;
-
-// ──────────────────────────────────────────────────────────────────────
-// Device list
-// ──────────────────────────────────────────────────────────────────────
-async function refreshDevices() {
-  try {
-    await requestMicPermission();
-  } catch (e) {
-    console.error('Microphone permission denied', e);
-    return;
-  }
-  const inputs = await listInputDevices();
-  deviceSelect.innerHTML = '';
-  for (const d of inputs) {
-    const opt = document.createElement('option');
-    opt.value = d.deviceId;
-    opt.textContent = d.label || `Input ${d.deviceId.slice(0, 6)}`;
-    deviceSelect.appendChild(opt);
-  }
-  // Auto-pick BlackHole if present
-  const black = inputs.find(d => /blackhole/i.test(d.label));
-  if (black) deviceSelect.value = black.deviceId;
-}
+// Which signal tape stop is currently dragging, so release knows how to undo it:
+// 'loop' slows the playing loop's rate; 'live' modulates the live delay line.
+let tapeStopMode: 'none' | 'loop' | 'live' = 'none';
 
 // ──────────────────────────────────────────────────────────────────────
 // Audio graph lifecycle
 // ──────────────────────────────────────────────────────────────────────
-async function start(mode: 'device' | 'tab') {
+async function start() {
   if (running) return;
 
+  // Tab audio is the only capture source. The browser's native picker opens on
+  // this click (it can't be skipped or restyled — see Chrome's screen-share
+  // security model); the user picks a Chrome Tab and ticks "Share tab audio".
   let nextStream: MediaStream;
-  if (mode === 'tab') {
-    try {
-      nextStream = await captureTabAudio();
-    } catch (e) {
-      console.error(e);
-      alert((e as Error).message ?? 'Tab capture cancelled or failed.');
-      return;
-    }
-  } else {
-    const deviceId = deviceSelect.value;
-    if (!deviceId) return;
-    nextStream = await captureFromDevice(deviceId);
+  try {
+    nextStream = await captureTabAudio();
+  } catch (e) {
+    console.error(e);
+    alert((e as Error).message ?? 'Tab capture cancelled or failed.');
+    return;
   }
 
   ctx = new AudioContext({ latencyHint: 'interactive' });
@@ -161,7 +138,7 @@ async function start(mode: 'device' | 'tab') {
   if (parseFloat(filterCutoff.value) > nyquist) filterCutoff.value = String(nyquist);
 
   // Apply current UI values
-  fx.filter.type = filterType.value as BiquadFilterType;
+  fx.filter.type = highPassMode ? 'highpass' : 'lowpass';
   fx.filter.frequency.value = parseFloat(filterCutoff.value);
   fx.filter.Q.value = parseFloat(filterQ.value);
   fx.delaySend.gain.value = parseFloat(delaySend.value);
@@ -177,13 +154,17 @@ async function start(mode: 'device' | 'tab') {
 
 
   // Signal chain (top to bottom = upstream to downstream):
-  //   source ──→ recorder           (raw capture for loops — no baked-in FX)
+  //   source ──→ loop recorder       (raw capture for loops — no baked-in FX)
   //   source ──→ liveGain (duckable) ─┐
-  //                                    ├─→ masterGate ─→ fx (filter + sends) ─→ masterGain ─→ destination
-  //   loop playback ─────────────────┘
+  //                                    ├─→ masterGate ─→ fx (filter + sends) ─→ fx.output ─┬─→ masterGain ─→ destination
+  //   loop playback ─────────────────┘                                                     │      ↑
+  //                                                          sampler recorder ←─────────────┘      │
+  //                                                          sampler playback ──────────────────────┘
   //
   // FX sit POST-gate-and-loop, so filter/delay/reverb apply to whatever survives the gate
   // and to loop playback. Killing the gate cuts the dry signal but lets the FX tail trail.
+  // The sampler is the last stage: it records fx.output (effects printed in) and plays
+  // back into masterGain (after the FX chain), so pads are unaffected by chain effects.
   masterGain = ctx.createGain();
   masterGain.gain.value = parseFloat(masterVol.value);
   masterGain.connect(ctx.destination);
@@ -198,16 +179,22 @@ async function start(mode: 'device' | 'tab') {
   liveGain = ctx.createGain();
   liveGain.gain.value = 1;
   source.connect(liveGain);
-  liveGain.connect(masterGate.node);
+  // Tape-stop delay line: transparent (0 delay) until tape stop grows it.
+  // maxDelay is generous so a held tape stop can sit frozen for several seconds.
+  tapeStopDelay = ctx.createDelay(6);
+  tapeStopDelay.delayTime.value = 0;
+  liveGain.connect(tapeStopDelay);
+  tapeStopDelay.connect(masterGate.node);
 
   // Looper records raw source and plays back into masterGate, so loop playback flows
   // through gate + FX the same way live audio does.
   looper = await Looper.create(ctx, source, masterGate.node, beat);
 
-  // Sampler shares the looper's ring buffer (via grab) but plays back POST-gate
-  // (straight into fx.input), so samples punch through gate kills/chops and aren't
-  // dragged by loop-only effects like tape stop. They still get the global FX flavor.
-  sampler = new Sampler(ctx, looper, fx.input);
+  // Sampler sits at the very end of the chain: it records the POST-FX output
+  // (fx.output), so pads capture audio with filter/delay/reverb/bitcrush printed
+  // in, and plays back straight into masterGain — downstream of the FX chain — so
+  // playback is untouched by any chain effects (and punches through gate kills).
+  sampler = await Sampler.create(ctx, fx.output, masterGain);
   sampler.onSampleEnded = (idx) => padElements[idx]?.classList.remove('playing');
   // Mark pads that have preloaded samples (e.g., the locked airhorn)
   for (let i = 0; i < PAD_COUNT; i++) {
@@ -232,14 +219,13 @@ async function start(mode: 'device' | 'tab') {
   };
 
   running = true;
-  startBtn.disabled = true;
   tabBtn.disabled = true;
-  stopBtn.disabled = false;
   requestAnimationFrame(uiTick);
 }
 
 function stop() {
   if (!running) return;
+  stopDialFollows();
   beat?.stop();
   looper?.stopLoop();
   stream?.getTracks().forEach(t => t.stop());
@@ -261,9 +247,7 @@ function stop() {
   lastBeatIndex = -1;
   for (const led of beatLEDs) led.classList.remove('lit', 'lit-1');
   running = false;
-  startBtn.disabled = false;
   tabBtn.disabled = false;
-  stopBtn.disabled = true;
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -278,6 +262,9 @@ function setupVizCanvas() {
   lcdViz.height = Math.max(1, Math.floor(rect.height * vizDpr));
 }
 window.addEventListener('resize', () => { if (running) setupVizCanvas(); });
+
+// Live output level (0..1) shared with the OP-1 tape screen for its brightness.
+let tapeLevel = 0;
 
 // Per-bar peak hold so the top edge has a falling "cap" — classic LCD viz look.
 const vizPeaks: number[] = [];
@@ -329,6 +316,22 @@ function drawViz() {
 }
 
 // ──────────────────────────────────────────────────────────────────────
+// Beat-synced delay time
+// The echo's delayTime tracks the detected tempo: time = beatDuration ×
+// note-division (the #delay-div selector, e.g. 0.75 = dotted-1/8). The tracker
+// keeps refining BPM, so we recompute each UI tick and glide to the new value —
+// the slight pitch-bend on the echo tail as it moves is the same artifact a
+// hardware tape delay gives. Debounced so a stable BPM stops issuing updates.
+let lastDelayTime = 0;
+function syncDelayTime() {
+  if (!fx || !ctx || !beat) return;
+  const target = beat.beatDuration() * parseFloat(delayDiv.value);
+  if (Math.abs(target - lastDelayTime) < 0.001) return;
+  lastDelayTime = target;
+  fx.delay.delayTime.setTargetAtTime(target, ctx.currentTime, 0.08);
+}
+
+// ──────────────────────────────────────────────────────────────────────
 // UI tick
 // ──────────────────────────────────────────────────────────────────────
 function uiTick() {
@@ -339,17 +342,18 @@ function uiTick() {
     for (let i = 0; i < meterData.length; i++) sum += meterData[i];
     const avg = sum / meterData.length;
     meter.style.width = `${Math.min(100, (avg / 200) * 100)}%`;
+    tapeLevel = Math.min(1, avg / 150);
     drawViz();
   }
   if (beat) {
+    syncDelayTime();
     bpmDisplay.textContent = beat.bpm.toFixed(1);
-    bpmConf.textContent = beat.bpmConfidence > 0.5 ? `locked (${beat.bpmConfidence.toFixed(2)})` : 'auto';
     if (beat.downbeat !== null) {
       const phase = beat.barPhase();
       const beatInBar = Math.floor(phase * beat.beatsPerBar) + 1;
       barDisplay.textContent = `${beatInBar} / ${beat.beatsPerBar}`;
     } else {
-      barDisplay.textContent = '— (listening… tap to set 1)';
+      barDisplay.textContent = '— / —';
     }
     updateBeatLEDs();
   }
@@ -364,7 +368,6 @@ function uiTick() {
 type GateAction = { kind: 'kill' } | { kind: 'rhythmic'; phase: number };
 const GATE_ACTIONS: Record<string, GateAction> = {
   kill: { kind: 'kill' },
-  '1.0': { kind: 'rhythmic', phase: 1.0 },
   '0.5': { kind: 'rhythmic', phase: 0.5 },
   '0.25': { kind: 'rhythmic', phase: 0.25 },
   '0.125': { kind: 'rhythmic', phase: 0.125 },
@@ -435,28 +438,12 @@ function releaseReverse() {
   duckLive(false);
 }
 
-function holdFreeze() {
-  if (!looper) return;
-  cancelActivePlayback();
-  freezeActive = true;
-  freezePill.classList.add('on');
-  duckLive(true);
-  looper.startFreeze();
-}
-
-function releaseFreeze() {
-  if (!freezeActive) return;
-  cancelActivePlayback();
-  duckLive(false);
-}
-
 function cancelActivePlayback() {
   if (currentLoop !== null) {
     LOOP_PILLS[currentLoop]?.classList.remove('on', 'recording');
     currentLoop = null;
   }
   if (reverseActive) { reversePill.classList.remove('on'); reverseActive = false; }
-  if (freezeActive) { freezePill.classList.remove('on'); freezeActive = false; }
   looper?.stopLoop();
 }
 
@@ -466,6 +453,40 @@ function duckLive(ducked: boolean) {
   liveGain.gain.cancelScheduledValues(t);
   liveGain.gain.setValueAtTime(liveGain.gain.value, t);
   liveGain.gain.linearRampToValueAtTime(ducked ? 0 : 1, t + 0.006);
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Dial-follow — link FX buttons to their dials
+// While a button sweeps an audio param (filter sweep, delay/reverb throw, tape
+// stop on a loop), spin the matching dial to track the param's live value, then
+// settle exactly on `target`. Reads the param each frame via `read()` (which
+// reflects the scheduled ramp), so the dial mirrors the audio without us
+// re-implementing the easing. Uses setKnobVisual, so the input's stored value —
+// the user's slider setting — is untouched and the release ramps back to it.
+// ──────────────────────────────────────────────────────────────────────
+const dialFollows = new Map<HTMLInputElement, number>();
+
+function followDial(input: HTMLInputElement, read: () => number, target: number): void {
+  const prev = dialFollows.get(input);
+  if (prev !== undefined) cancelAnimationFrame(prev);
+  const range = Math.abs(parseFloat(input.max || '1') - parseFloat(input.min || '0')) || 1;
+  const tol = range * 0.003;
+  const tick = () => {
+    const v = read();
+    setKnobVisual(input, v);
+    if (Math.abs(v - target) <= tol) {
+      dialFollows.delete(input);
+      setKnobVisual(input, target); // land exactly on the resting / thrown value
+      return;
+    }
+    dialFollows.set(input, requestAnimationFrame(tick));
+  };
+  dialFollows.set(input, requestAnimationFrame(tick));
+}
+
+function stopDialFollows(): void {
+  for (const id of dialFollows.values()) cancelAnimationFrame(id);
+  dialFollows.clear();
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -482,19 +503,26 @@ function filterSweepDown() {
   fx.filter.frequency.cancelScheduledValues(t);
   fx.filter.frequency.setValueAtTime(Math.max(fx.filter.frequency.value, 20), t);
   fx.filter.frequency.exponentialRampToValueAtTime(300, t + SWEEP_MS / 1000);
+  const freq = fx.filter.frequency;
+  followDial(filterCutoff, () => freq.value, 300);
 }
 function filterSweepUp() {
   if (!fx || !ctx) return;
   const t = ctx.currentTime;
+  const rest = parseFloat(filterCutoff.value);
   fx.filter.frequency.cancelScheduledValues(t);
   fx.filter.frequency.setValueAtTime(Math.max(fx.filter.frequency.value, 20), t);
-  fx.filter.frequency.exponentialRampToValueAtTime(parseFloat(filterCutoff.value), t + SWEEP_MS / 1000);
+  fx.filter.frequency.exponentialRampToValueAtTime(rest, t + SWEEP_MS / 1000);
+  const freq = fx.filter.frequency;
+  followDial(filterCutoff, () => freq.value, rest);
 }
 
 // Register every learnable action with its handler, pill, and default keyboard binding.
+// Tap-to-set-downbeat is keyboard/MIDI only now (the on-screen pill was removed);
+// it keeps its Space default and stays remappable in learn mode via the binding.
 bindings.register('tap',
   { down: () => beat?.tap() },
-  { pill: tapPill, default: { source: 'key', code: 'Space' } });
+  { default: { source: 'key', code: 'Space' } });
 
 bindings.register('filter-sweep',
   { down: filterSweepDown, up: filterSweepUp },
@@ -512,12 +540,12 @@ function throwSend(gain: AudioParam, level: number, attackMs: number) {
   gain.linearRampToValueAtTime(level, t + attackMs / 1000);
 }
 bindings.register('delay-throw', {
-  down: () => fx && throwSend(fx.delaySend.gain, THROW_LEVEL, 50),
-  up:   () => fx && throwSend(fx.delaySend.gain, parseFloat(delaySend.value), 300),
+  down: () => { if (!fx) return; const g = fx.delaySend.gain; throwSend(g, THROW_LEVEL, 50); followDial(delaySend, () => g.value, THROW_LEVEL); },
+  up:   () => { if (!fx) return; const g = fx.delaySend.gain; const rest = parseFloat(delaySend.value); throwSend(g, rest, 300); followDial(delaySend, () => g.value, rest); },
 }, { pill: delayThrowPill, default: { source: 'key', code: 'KeyT' } });
 bindings.register('reverb-throw', {
-  down: () => fx && throwSend(fx.reverbSend.gain, THROW_LEVEL, 50),
-  up:   () => fx && throwSend(fx.reverbSend.gain, parseFloat(reverbSend.value), 300),
+  down: () => { if (!fx) return; const g = fx.reverbSend.gain; throwSend(g, THROW_LEVEL, 50); followDial(reverbSend, () => g.value, THROW_LEVEL); },
+  up:   () => { if (!fx) return; const g = fx.reverbSend.gain; const rest = parseFloat(reverbSend.value); throwSend(g, rest, 300); followDial(reverbSend, () => g.value, rest); },
 }, { pill: reverbThrowPill, default: { source: 'key', code: 'KeyR' } });
 
 // EQ kills — exponential cutoff sweep on hold
@@ -576,7 +604,7 @@ function applyTopBitcrush() {
 
 const BITCRUSH_DEFAULTS: Array<[string, string]> = [
   ['5', 'KeyB'],
-  ['3', 'KeyN'],
+  ['4', 'KeyN'],
 ];
 for (const [id, code] of BITCRUSH_DEFAULTS) {
   bindings.register(`bitcrush:${id}`,
@@ -590,13 +618,6 @@ bindings.register('reverse', {
   up:   () => releaseReverse(),
 }, { pill: reversePill, default: { source: 'key', code: 'KeyV' } });
 
-// Freeze — rear-looking tiny slice
-bindings.register('freeze', {
-  down: () => holdFreeze(),
-  up:   () => releaseFreeze(),
-}, { pill: freezePill, default: { source: 'key', code: 'KeyC' } });
-
-// Tape stop — slow active loop's playback rate to ~0 on hold
 // ────────────────────── Sampler ──────────────────────
 function setRecordMode(on: boolean) {
   recordModeActive = on;
@@ -634,9 +655,10 @@ function padUp(idx: number) {
   // For one-shot we leave the class until the sample naturally finishes (handled by onSampleEnded).
 }
 
-modePill.addEventListener('click', () => {
+// The HOLD / ONE-SHOT toggle (pan-knob switch): .on lights the one-shot side.
+modeToggle.querySelector<HTMLButtonElement>('.switch')!.addEventListener('click', () => {
   oneShotMode = !oneShotMode;
-  modePill.textContent = oneShotMode ? 'ONE-SHOT' : 'HOLD';
+  modeToggle.classList.toggle('on', oneShotMode);
 });
 
 bindings.register('rec-hold', {
@@ -653,23 +675,83 @@ for (let i = 0; i < PAD_COUNT; i++) {
   }, { pill: padElements[i], default: { source: 'key', code: PAD_DEFAULT_KEYS[i] } });
 }
 
+// Tape stop — drag playback down to a halt on hold (the classic "tape spinning
+// down" pitch drop), then spin back up on release. If a loop is playing it slows
+// the loop's playback rate; otherwise it grows the live delay line so the live
+// signal pitches down in place — no buffer grab, so the effect lands instantly.
+const TAPE_STOP_MS = 220;          // wind-down time
+const TAPE_STOP_FROZEN_HOLD = 5;   // seconds it can sit ~frozen while held
+
+// Growing the delay reads ever-older samples → the audio plays slower than real
+// time → pitch drops. delay(τ) = base + τ²/(2T) decelerates the rate from 1 to 0.
+function tapeStopLiveDown() {
+  if (!tapeStopDelay || !ctx) return;
+  const t = ctx.currentTime;
+  const T = TAPE_STOP_MS / 1000;
+  const dt = tapeStopDelay.delayTime;
+  dt.cancelAndHoldAtTime(t);
+  const base = dt.value;
+  // Piecewise-linear approximation of delay(τ) = base + τ²/(2T): the rising slope
+  // makes the rate decelerate from 1 toward 0 across the wind-down.
+  const segs = 8;
+  for (let i = 1; i <= segs; i++) {
+    const tau = (i / segs) * T;
+    dt.linearRampToValueAtTime(base + (tau * tau) / (2 * T), t + tau);
+  }
+  // Held past the wind-down: keep the delay growing ~1s per second so the rate
+  // stays ~0 (frozen) for a few seconds before the delay line caps out.
+  const stopped = base + T / 2;
+  dt.linearRampToValueAtTime(stopped + TAPE_STOP_FROZEN_HOLD, t + T + TAPE_STOP_FROZEN_HOLD);
+}
+
+// Spin back up to live: shrink the delay to 0. Reading toward newer samples plays
+// faster than real time, so it chirps back up to pitch and resyncs to live. Scale
+// the spin-up time with how far we fell so a long freeze doesn't squeal.
+function tapeStopLiveUp() {
+  if (!tapeStopDelay || !ctx) return;
+  const t = ctx.currentTime;
+  const dt = tapeStopDelay.delayTime;
+  dt.cancelAndHoldAtTime(t);
+  const cur = dt.value;
+  const spinUp = Math.min(0.5, 0.12 + cur * 0.2);
+  dt.linearRampToValueAtTime(0, t + spinUp);
+}
+
 bindings.register('tape-stop', {
   down: () => {
+    if (!looper) return;
     tapeStopActive = true;
     tapeStopPill.classList.add('on');
-    looper?.setPlaybackRate(0.001, 800);
+    if (looper.isPlaying) {
+      tapeStopMode = 'loop';
+      looper.setPlaybackRate(0.0001, TAPE_STOP_MS);
+      const lp = looper;
+      followDial(loopPitch, () => lp.playbackRate, 0.0001);
+    } else {
+      tapeStopMode = 'live';
+      tapeStopLiveDown();
+    }
   },
   up: () => {
     if (!tapeStopActive) return;
     tapeStopActive = false;
     tapeStopPill.classList.remove('on');
-    looper?.setPlaybackRate(parseFloat(loopPitch.value), 200);
+    if (tapeStopMode === 'loop') {
+      const rest = parseFloat(loopPitch.value);
+      if (looper) {
+        const lp = looper;
+        lp.setPlaybackRate(rest, 200);
+        followDial(loopPitch, () => lp.playbackRate, rest);
+      }
+    } else if (tapeStopMode === 'live') {
+      tapeStopLiveUp();
+    }
+    tapeStopMode = 'none';
   },
 }, { pill: tapeStopPill, default: { source: 'key', code: 'KeyZ' } });
 
 const GATE_DEFAULTS: Array<[string, string]> = [
   ['kill', 'KeyG'],
-  ['1.0', 'Digit1'],
   ['0.5', 'Digit2'],
   ['0.25', 'Digit3'],
   ['0.125', 'Digit4'],
@@ -710,7 +792,6 @@ window.addEventListener('keyup', (e) => {
 });
 
 function handleMidi(e: MidiEvent) {
-  midiLast.textContent = JSON.stringify(e);
   if (e.type === 'noteon') bindings.handleMidi(e.note, 'on');
   else if (e.type === 'noteoff') bindings.handleMidi(e.note, 'off');
   // CC handling (knobs/encoders) bypasses the binding manager for now —
@@ -729,11 +810,27 @@ resetBindingsBtn.addEventListener('click', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────
+// Theme switcher (Snow Leopard ↔ Realistic) — applies body.theme-<name>
+// ──────────────────────────────────────────────────────────────────────
+const themeSelect = $<HTMLSelectElement>('theme-select');
+const THEME_KEY = 'dj-amp-theme';
+const THEMES = ['snow-leopard', 'realistic'] as const;
+function applyTheme(theme: string) {
+  document.body.classList.remove(...THEMES.map((t) => `theme-${t}`));
+  document.body.classList.add(`theme-${theme}`);
+}
+const savedTheme = localStorage.getItem(THEME_KEY) ?? 'realistic';
+themeSelect.value = savedTheme;
+applyTheme(savedTheme);
+themeSelect.addEventListener('change', () => {
+  applyTheme(themeSelect.value);
+  localStorage.setItem(THEME_KEY, themeSelect.value);
+});
+
+// ──────────────────────────────────────────────────────────────────────
 // UI wiring
 // ──────────────────────────────────────────────────────────────────────
-startBtn.addEventListener('click', () => start('device'));
-tabBtn.addEventListener('click', () => start('tab'));
-stopBtn.addEventListener('click', stop);
+tabBtn.addEventListener('click', () => start());
 resetBtn.addEventListener('click', () => beat?.reset());
 
 filterCutoff.addEventListener('input', () => {
@@ -742,12 +839,16 @@ filterCutoff.addEventListener('input', () => {
 filterQ.addEventListener('input', () => {
   if (fx) fx.filter.Q.value = parseFloat(filterQ.value);
 });
-filterType.addEventListener('change', () => {
-  if (fx) fx.filter.type = filterType.value as BiquadFilterType;
+// The LP / HP filter-type toggle (pan-knob switch): .on lights the high-pass side.
+filterTypeToggle.querySelector<HTMLButtonElement>('.switch')!.addEventListener('click', () => {
+  highPassMode = !highPassMode;
+  filterTypeToggle.classList.toggle('on', highPassMode);
+  if (fx) fx.filter.type = highPassMode ? 'highpass' : 'lowpass';
 });
 delaySend.addEventListener('input', () => {
   if (fx && ctx) fx.delaySend.gain.setTargetAtTime(parseFloat(delaySend.value), ctx.currentTime, 0.01);
 });
+delayDiv.addEventListener('change', syncDelayTime);
 reverbSend.addEventListener('input', () => {
   if (fx && ctx) fx.reverbSend.gain.setTargetAtTime(parseFloat(reverbSend.value), ctx.currentTime, 0.01);
 });
@@ -784,12 +885,16 @@ function updateBeatLEDs() {
 // ──────────────────────────────────────────────────────────────────────
 // Init
 // ──────────────────────────────────────────────────────────────────────
-refreshDevices();
-navigator.mediaDevices.addEventListener('devicechange', refreshDevices);
+knobifyAll();   // turn every range slider into a rotary dial
+styleControlLabels();   // wrap FX-button / pad labels for the engraved text style
 
-setupMidi(handleMidi).then(res => {
-  if (!res) { midiStatus.textContent = 'WebMIDI unavailable (use Chrome/Edge)'; return; }
-  midiStatus.textContent = res.inputNames.length
-    ? `connected: ${res.inputNames.join(', ')}`
-    : 'no MIDI inputs found';
-});
+// OP-1 tape screen — animates continuously, reading live engine state.
+const tape = new Op1Tape(tapeCanvas, () => ({
+  running,
+  bpm: beat?.bpm ?? 120,
+  level: running ? tapeLevel : 0,
+}));
+tape.start();
+window.addEventListener('resize', () => tape.resize());
+
+setupMidi(handleMidi);

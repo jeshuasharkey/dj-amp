@@ -1,4 +1,5 @@
 import type { BeatTracker } from './beat';
+import { TapRecorder } from './recorder';
 
 // Forward-looking record-then-loop. Press loop key → live keeps playing while we
 // record for the loop's duration. After N beats, the recorded buffer starts
@@ -10,7 +11,7 @@ export class Looper {
   private ctx: AudioContext;
   private beat: BeatTracker;
   private output: AudioNode;
-  private recorder: AudioWorkletNode;
+  private recorder: TapRecorder;
   private active: AudioBufferSourceNode | null = null;
   private activeFade: GainNode | null = null;
   private recordTimer: number | null = null;
@@ -27,45 +28,18 @@ export class Looper {
   onPlaybackStart: ((beats: number) => void) | null = null;
   onPlaybackStop: (() => void) | null = null;
 
-  constructor(ctx: AudioContext, source: AudioNode, output: AudioNode, beat: BeatTracker, recorder: AudioWorkletNode) {
+  constructor(ctx: AudioContext, output: AudioNode, beat: BeatTracker, recorder: TapRecorder) {
     this.ctx = ctx;
     this.beat = beat;
     this.output = output;
     this.recorder = recorder;
-    // The recorder taps the post-FX signal so loops include the FX as printed.
-    source.connect(this.recorder);
   }
 
   static async create(ctx: AudioContext, source: AudioNode, output: AudioNode, beat: BeatTracker): Promise<Looper> {
-    await ctx.audioWorklet.addModule('/worklets/recorder.js');
-    const recorder = new AudioWorkletNode(ctx, 'recorder', {
-      numberOfInputs: 1,
-      numberOfOutputs: 0,
-      channelCount: 2,
-      channelCountMode: 'explicit',
-    });
-    return new Looper(ctx, source, output, beat, recorder);
-  }
-
-  // Public so the Sampler can reuse the recorder's ring buffer.
-  grab(samples: number): Promise<AudioBuffer> {
-    return new Promise(resolve => {
-      const id = Math.random();
-      const handler = (e: MessageEvent) => {
-        if (e.data.type === 'grabbed' && e.data.id === id) {
-          this.recorder.port.removeEventListener('message', handler);
-          const ch0: Float32Array = e.data.ch0;
-          const ch1: Float32Array = e.data.ch1;
-          const buf = this.ctx.createBuffer(2, ch0.length, this.ctx.sampleRate);
-          buf.getChannelData(0).set(ch0);
-          buf.getChannelData(1).set(ch1);
-          resolve(buf);
-        }
-      };
-      this.recorder.port.addEventListener('message', handler);
-      this.recorder.port.start();
-      this.recorder.port.postMessage({ type: 'grab', samples, id });
-    });
+    // Tap the raw source so loops carry no baked-in FX — they re-run through
+    // gate + FX live on playback.
+    const recorder = await TapRecorder.create(ctx, source);
+    return new Looper(ctx, output, beat, recorder);
   }
 
   // Forward record-then-loop. Live keeps playing while we record; after `beats`
@@ -84,7 +58,7 @@ export class Looper {
       this.recordTimer = null;
       if (myGen !== this.gen) return;
 
-      const buf = await this.grab(samples);
+      const buf = await this.recorder.grab(samples);
       if (myGen !== this.gen) return;
 
       this.playBuffer(buf);
@@ -98,7 +72,7 @@ export class Looper {
     this.stopLoop();
     const myGen = ++this.gen;
     const samples = Math.floor(beats * this.beat.beatDuration() * this.ctx.sampleRate);
-    const buf = await this.grab(samples);
+    const buf = await this.recorder.grab(samples);
     if (myGen !== this.gen) return;
     for (let ch = 0; ch < buf.numberOfChannels; ch++) {
       buf.getChannelData(ch).reverse();
@@ -106,27 +80,6 @@ export class Looper {
     this.playBuffer(buf);
   }
 
-  // Freeze: grab a small slice and loop it as a sustained drone, Hann-windowed
-  // at the edges so the loop point doesn't click.
-  async startFreeze(): Promise<void> {
-    this.stopLoop();
-    const myGen = ++this.gen;
-    const sliceSec = 0.1;
-    const samples = Math.floor(sliceSec * this.ctx.sampleRate);
-    const buf = await this.grab(samples);
-    if (myGen !== this.gen) return;
-    const len = buf.length;
-    const fadeLen = Math.floor(len / 4);
-    for (let ch = 0; ch < buf.numberOfChannels; ch++) {
-      const data = buf.getChannelData(ch);
-      for (let i = 0; i < fadeLen; i++) {
-        const w = 0.5 * (1 - Math.cos(Math.PI * i / fadeLen));
-        data[i] *= w;
-        data[len - 1 - i] *= w;
-      }
-    }
-    this.playBuffer(buf);
-  }
 
   // Set the playback rate (for tape stop + loop pitch). Persists across loop
   // restarts so the slider keeps applying to future loops.
@@ -181,6 +134,12 @@ export class Looper {
       this.activeFade = null;
       this.onPlaybackStop?.();
     }
+  }
+
+  // Live playback rate of the currently playing source (so a dial can follow
+  // tape stop dragging the loop down). Falls back to the inherited rate when idle.
+  get playbackRate(): number {
+    return this.active ? this.active.playbackRate.value : this.currentRate;
   }
 
   get isPlaying(): boolean { return this.active !== null; }
