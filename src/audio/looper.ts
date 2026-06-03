@@ -22,11 +22,16 @@ export class Looper {
   // by any new source that starts. Lets the loop-pitch slider and tape-stop affect
   // future loops, not just the one that's currently playing.
   private currentRate = 1;
+  // Retained copy of the playing loop's buffer and its length in beats, so a
+  // resize can re-slice the same audio (shorten) without re-recording. Also acts
+  // as the token guarding the async grab in a lengthening resize.
+  private loopBuf: AudioBuffer | null = null;
+  private currentBeats = 0;
 
   onRecordingStart: ((beats: number, durationMs: number) => void) | null = null;
   onRecordingCancel: ((beats: number) => void) | null = null;
   onPlaybackStart: ((beats: number) => void) | null = null;
-  onPlaybackStop: (() => void) | null = null;
+  onPlaybackStop: ((beats: number) => void) | null = null;
 
   constructor(ctx: AudioContext, output: AudioNode, beat: BeatTracker, recorder: TapRecorder) {
     this.ctx = ctx;
@@ -48,6 +53,7 @@ export class Looper {
   startLoop(beats: number): void {
     this.stopLoop();
     const myGen = ++this.gen;
+    this.currentBeats = beats;
 
     const loopDur = beats * this.beat.beatDuration();
     const samples = Math.floor(loopDur * this.ctx.sampleRate);
@@ -61,9 +67,38 @@ export class Looper {
       const buf = await this.recorder.grab(samples);
       if (myGen !== this.gen) return;
 
+      this.loopBuf = buf;
       this.playBuffer(buf);
       this.onPlaybackStart?.(beats);
     }, loopDur * 1000);
+  }
+
+  // Resize the *currently playing* loop in place — shorten or lengthen — without
+  // starting a new record-then-loop. Shortening re-slices the front of the
+  // already-captured buffer (same audio, just less of it); lengthening past what
+  // we captured grabs a fresh rear-looking window of the new length. If no loop
+  // is playing yet (still inside the record window), there's nothing to resize,
+  // so we just restart the record at the new size.
+  resizeLoop(beats: number): void {
+    if (!this.active) { this.startLoop(beats); return; }
+
+    const prev = this.currentBeats;
+    if (beats === prev) return;
+    this.currentBeats = beats; // doubles as the token guarding the async grab below
+    this.onPlaybackStop?.(prev);
+    this.onPlaybackStart?.(beats);
+
+    const samples = Math.floor(beats * this.beat.beatDuration() * this.ctx.sampleRate);
+    if (this.loopBuf && samples <= this.loopBuf.length) {
+      this.swapTo(this.sliceBuffer(this.loopBuf, samples));
+    } else {
+      this.recorder.grab(samples).then(buf => {
+        // Bail if another resize/stop superseded this grab while it was in flight.
+        if (this.currentBeats !== beats || !this.active) return;
+        this.loopBuf = buf;
+        this.swapTo(buf);
+      });
+    }
   }
 
   // Rear-looking reverse roll: grab the last N beats, reverse, loop immediately.
@@ -108,13 +143,43 @@ export class Looper {
     this.activeFade = fade;
   }
 
+  // Crossfade the active loop source over to a new buffer without firing the
+  // start/stop callbacks (the caller owns the visuals). Used by resizeLoop so a
+  // size change is seamless rather than a hard cut.
+  private swapTo(buf: AudioBuffer): void {
+    if (this.active && this.activeFade) {
+      const t = this.ctx.currentTime;
+      const old = this.active;
+      const oldFade = this.activeFade;
+      oldFade.gain.cancelScheduledValues(t);
+      oldFade.gain.setValueAtTime(oldFade.gain.value, t);
+      oldFade.gain.linearRampToValueAtTime(0, t + 0.01);
+      setTimeout(() => {
+        try { old.stop(); } catch {}
+        old.disconnect();
+        oldFade.disconnect();
+      }, 20);
+    }
+    this.playBuffer(buf);
+  }
+
+  // Copy the front `samples` of a buffer into a fresh, shorter buffer.
+  private sliceBuffer(src: AudioBuffer, samples: number): AudioBuffer {
+    const n = Math.min(samples, src.length);
+    const out = this.ctx.createBuffer(src.numberOfChannels, n, this.ctx.sampleRate);
+    for (let ch = 0; ch < src.numberOfChannels; ch++) {
+      out.getChannelData(ch).set(src.getChannelData(ch).subarray(0, n));
+    }
+    return out;
+  }
+
   stopLoop(): void {
     // Cancel any pending recording
     if (this.recordTimer !== null) {
       clearTimeout(this.recordTimer);
       this.recordTimer = null;
       this.gen++;
-      this.onRecordingCancel?.(0);
+      this.onRecordingCancel?.(this.currentBeats);
     }
 
     // Fade out any active playback
@@ -132,8 +197,9 @@ export class Looper {
       }, 12);
       this.active = null;
       this.activeFade = null;
-      this.onPlaybackStop?.();
+      this.onPlaybackStop?.(this.currentBeats);
     }
+    this.loopBuf = null;
   }
 
   // Live playback rate of the currently playing source (so a dial can follow

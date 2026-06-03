@@ -206,16 +206,16 @@ async function start() {
   looper.onRecordingStart = (beats) => {
     LOOP_PILLS[beats]?.classList.add('recording');
   };
-  looper.onRecordingCancel = () => {
-    if (currentLoop !== null) LOOP_PILLS[currentLoop]?.classList.remove('recording');
+  looper.onRecordingCancel = (beats) => {
+    LOOP_PILLS[beats]?.classList.remove('recording');
   };
   looper.onPlaybackStart = (beats) => {
     LOOP_PILLS[beats]?.classList.remove('recording');
     LOOP_PILLS[beats]?.classList.add('on');
     duckLive(true);
   };
-  looper.onPlaybackStop = () => {
-    if (currentLoop !== null) LOOP_PILLS[currentLoop]?.classList.remove('on');
+  looper.onPlaybackStop = (beats) => {
+    LOOP_PILLS[beats]?.classList.remove('on');
   };
 
   running = true;
@@ -242,6 +242,9 @@ function stop() {
   meterData = null;
   sampler = null;
   recordModeActive = false;
+  heldLoopStack.length = 0;
+  currentLoop = null;
+  for (const el of Object.values(LOOP_PILLS)) el.classList.remove('on', 'recording');
   recPill.classList.remove('armed');
   for (const pad of padElements) pad.classList.remove('playing', 'recording');
   lastBeatIndex = -1;
@@ -409,18 +412,47 @@ function refreshGatePills(activeId: string | null) {
   }
 }
 
-function holdLoop(beats: number) {
+// Loop buttons held simultaneously, in press order (most recent = last). The
+// first press in a chain starts a normal forward record-then-loop; while it's
+// still held, pressing another size overrides the live loop's length in place
+// (shorten/lengthen) instead of starting a new loop. Releasing the top falls
+// back to whichever size is still held; releasing the last one ends the loop.
+const heldLoopStack: number[] = [];
+
+function loopDown(beats: number) {
   if (!looper) return;
-  cancelActivePlayback();
-  currentLoop = beats;
-  looper.startLoop(beats); // visual handled by onRecordingStart / onPlaybackStart
+  if (heldLoopStack.includes(beats)) return;
+  const wasEmpty = heldLoopStack.length === 0;
+  heldLoopStack.push(beats);
+  if (wasEmpty) {
+    // Fresh loop: clear any reverse/other playback and start the record window.
+    cancelActivePlayback();
+    currentLoop = beats;
+    looper.startLoop(beats); // visual handled by onRecordingStart / onPlaybackStart
+  } else {
+    // A loop button is already held → override the existing loop's size.
+    applyTopLoop();
+  }
 }
 
-function releaseLoop(beats: number) {
+function loopUp(beats: number) {
+  const idx = heldLoopStack.indexOf(beats);
+  if (idx >= 0) heldLoopStack.splice(idx, 1);
+  applyTopLoop();
+}
+
+function applyTopLoop() {
   if (!looper) return;
-  if (currentLoop !== beats) return;
-  cancelActivePlayback();
-  duckLive(false);
+  if (heldLoopStack.length === 0) {
+    // All loop buttons released — end the loop and restore the live signal.
+    cancelActivePlayback();
+    duckLive(false);
+    return;
+  }
+  const top = heldLoopStack[heldLoopStack.length - 1];
+  if (top === currentLoop) return;
+  currentLoop = top;
+  looper.resizeLoop(top); // visual handled by onPlaybackStop / onPlaybackStart
 }
 
 function holdReverse(beats: number) {
@@ -774,7 +806,7 @@ const LOOP_DEFAULTS: Array<[number, string]> = [
 ];
 for (const [beats, code] of LOOP_DEFAULTS) {
   bindings.register(`loop:${beats}`,
-    { down: () => holdLoop(beats), up: () => releaseLoop(beats) },
+    { down: () => loopDown(beats), up: () => loopUp(beats) },
     { pill: LOOP_PILLS[beats], default: { source: 'key', code } });
 }
 

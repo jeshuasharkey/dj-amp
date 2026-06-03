@@ -49,9 +49,6 @@ export function knobify(input: HTMLInputElement): void {
   const stage = document.createElement('span');
   stage.className = 'knob-stage';
 
-  const notch = document.createElement('div');
-  notch.className = 'top-notch';
-
   const ticks = document.createElement('div');
   ticks.className = 'ticks';
   for (let i = 0; i < TICK_COUNT; i++) {
@@ -73,7 +70,7 @@ export function knobify(input: HTMLInputElement): void {
   orbit.appendChild(indicator);
   knob.appendChild(orbit);
 
-  stage.append(notch, ticks, knob);
+  stage.append(ticks, knob);
 
   // ── reflow the label: [caption text][input] → [dial][caption span], input hidden ──
   for (const node of Array.from(label.childNodes)) {
@@ -132,6 +129,41 @@ export function knobify(input: HTMLInputElement): void {
     render();
   });
 
+  // double-click eases the dial back to its default value (the HTML `value`
+  // attr), sweeping the audio param along with the indicator rather than jumping.
+  const RESET_MS = 260;
+  const easeOutCubic = (p: number) => 1 - Math.pow(1 - p, 3);
+  let resetRaf = 0;
+  knob.addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    const def = parseFloat(input.defaultValue);
+    if (Number.isNaN(def)) return;
+    const defClamped = Math.max(min, Math.min(max, def));
+    const from = rotation;
+    const to = valueToRot(defClamped);
+    cancelAnimationFrame(resetRaf);
+    if (Math.abs(to - from) < 0.01) return;
+    let t0 = 0;
+    const step = (now: number) => {
+      if (!t0) t0 = now;
+      const p = Math.min(1, (now - t0) / RESET_MS);
+      rotation = from + (to - from) * easeOutCubic(p);
+      input.value = String(rotToValue(rotation));
+      render();
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      if (p < 1) {
+        resetRaf = requestAnimationFrame(step);
+      } else {
+        rotation = to; // land exactly on the default
+        input.value = String(defClamped);
+        render();
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    };
+    resetRaf = requestAnimationFrame(step);
+  });
+
   // ── drag-to-rotate (up & right increase) ──
   let startX = 0;
   let startY = 0;
@@ -140,6 +172,7 @@ export function knobify(input: HTMLInputElement): void {
 
   knob.addEventListener('pointerdown', (e) => {
     e.preventDefault();
+    cancelAnimationFrame(resetRaf); // a grab interrupts any in-flight reset
     knob.setPointerCapture(e.pointerId);
     knob.style.cursor = 'grabbing';
     dragging = true;
